@@ -28,7 +28,7 @@ import {
 } from "@marcfargas/pi-server-protocol";
 import { type IPiTransport } from "./pi-process.js";
 import { UIBridge } from "./ui-bridge.js";
-import { routeSlashCommand, getBuiltinCommands } from "./slash-commands.js";
+
 
 export interface WsServerOptions {
   port: number;
@@ -181,24 +181,10 @@ export class WsServer {
 
   private handleClientMessage(message: ClientMessage): void {
     switch (message.type) {
-      case "command": {
-        const payload = message.payload as Record<string, unknown>;
-
-        // Intercept prompt commands: route slash commands to RPC
-        if (payload.type === "prompt" && typeof payload.message === "string") {
-          const rpc = routeSlashCommand(payload.message);
-          if (rpc) {
-            // Copy the id for response correlation
-            if (payload.id) rpc.id = payload.id;
-            this.piProcess.send(rpc);
-            break;
-          }
-        }
-
-        // Regular relay
-        this.piProcess.send(payload);
+      case "command":
+        // Relay the pi RPC command to pi's stdin
+        this.piProcess.send(message.payload);
         break;
-      }
 
       case "extension_ui_response":
         // Route to UI bridge which resolves the pending request
@@ -232,17 +218,6 @@ export class WsServer {
       }
     }
 
-    // Enrich get_commands responses with built-in commands
-    if (
-      message.type === "response" &&
-      (message as Record<string, unknown>).command === "get_commands" &&
-      (message as Record<string, unknown>).success === true
-    ) {
-      const data = (message as Record<string, unknown>).data as Record<string, unknown> | undefined;
-      if (data && Array.isArray(data.commands)) {
-        data.commands = [...getBuiltinCommands(), ...(data.commands as unknown[])];
-      }
-    }
 
     // Check if this is an extension UI request
     if (this.uiBridge.isExtensionUIRequest(message)) {
