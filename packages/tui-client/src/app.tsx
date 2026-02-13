@@ -4,7 +4,7 @@
  * Renders the full interactive terminal UI:
  * - Connection status bar
  * - Conversation history (completed messages in <Static>)
- * - Streaming assistant response (live area)
+ * - Streaming assistant response with tool output + thinking
  * - Extension UI dialogs
  * - Text input bar
  */
@@ -16,11 +16,24 @@ import { Connection, type ConnectionState } from "./connection.js";
 import {
   appReducer,
   initialState,
+  extractToolText,
   type AppState,
   type CompletedMessage,
   type ToolExecution,
   type ExtensionUIRequest,
 } from "./state.js";
+
+// Max lines of tool output to show (avoid flooding the terminal)
+const MAX_TOOL_OUTPUT_LINES = 15;
+
+function truncateOutput(text: string): string {
+  const lines = text.split("\n");
+  if (lines.length <= MAX_TOOL_OUTPUT_LINES) return text;
+  return (
+    lines.slice(0, MAX_TOOL_OUTPUT_LINES).join("\n") +
+    `\n… (${lines.length - MAX_TOOL_OUTPUT_LINES} more lines)`
+  );
+}
 
 // =============================================================================
 // Main App
@@ -37,10 +50,8 @@ export default function App({ url }: AppProps) {
   const [inputValue, setInputValue] = useState("");
   const [connection, setConnection] = useState<Connection | null>(null);
 
-  // Terminal dimensions for layout
   const columns = stdout?.columns ?? 80;
 
-  // Create and wire up connection
   useEffect(() => {
     const conn = new Connection(url, {
       onStateChange: (connState: ConnectionState) => {
@@ -48,7 +59,6 @@ export default function App({ url }: AppProps) {
       },
 
       onWelcome: (welcome) => {
-        // Extract model name from session state
         const sessionState = welcome.sessionState as Record<string, unknown>;
         const model = sessionState?.model as Record<string, unknown> | undefined;
         const modelName = (model?.name as string) ?? (model?.id as string);
@@ -79,19 +89,14 @@ export default function App({ url }: AppProps) {
 
     conn.connect();
     setConnection(conn);
-
-    return () => {
-      conn.disconnect();
-    };
+    return () => conn.disconnect();
   }, [url]);
 
-  // Handle text input submission
   const handleSubmit = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
 
-      // Commands
       if (trimmed === "/quit" || trimmed === "/exit") {
         connection?.disconnect();
         exit();
@@ -104,7 +109,6 @@ export default function App({ url }: AppProps) {
         return;
       }
 
-      // If agent is busy, send as steer (interrupt); otherwise prompt
       if (state.isAgentBusy) {
         dispatch({ type: "USER_MESSAGE", content: `[steer] ${trimmed}` });
         connection?.sendCommand({ type: "prompt", message: trimmed, streamingBehavior: "steer" });
@@ -117,7 +121,6 @@ export default function App({ url }: AppProps) {
     [connection, exit, state.isAgentBusy],
   );
 
-  // Handle extension UI responses
   const handleExtensionUIResponse = useCallback(
     (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => {
       if (state.extensionUI && connection) {
@@ -128,37 +131,31 @@ export default function App({ url }: AppProps) {
     [state.extensionUI, connection],
   );
 
-  // Allow typing during streaming (for steer/interrupt) — only block for ext UI
   const canInput = state.connectionState === "connected" && !state.extensionUI;
 
   return (
     <Box flexDirection="column" width={columns}>
-      {/* Completed messages — pinned above, scroll naturally */}
       <Static items={state.completedMessages}>
-        {(msg) => <MessageView key={msg.id} message={msg} width={columns} />}
+        {(msg) => <MessageView key={msg.id} message={msg} />}
       </Static>
 
-      {/* Live area: status + streaming + input */}
       <Box flexDirection="column">
-        {/* Connection status */}
         <StatusBar state={state} />
 
-        {/* Error banner */}
         {state.errorMessage && (
           <Box marginLeft={1}>
             <Text color="red">⚠ {state.errorMessage}</Text>
           </Box>
         )}
 
-        {/* Streaming assistant response */}
         {state.isAgentBusy && (
           <StreamingArea
             text={state.streamingText}
+            thinking={state.streamingThinking}
             tools={state.streamingTools}
           />
         )}
 
-        {/* Extension UI dialog */}
         {state.extensionUI && (
           <ExtensionUIDialog
             request={state.extensionUI}
@@ -166,26 +163,23 @@ export default function App({ url }: AppProps) {
           />
         )}
 
-        {/* Input bar */}
         <Box>
-          <Box>
-            <Text color={canInput ? "green" : "gray"}>
-              {state.isAgentBusy ? "⏳" : "❯"}{" "}
-            </Text>
-            {canInput ? (
-              <TextInput
-                value={inputValue}
-                onChange={setInputValue}
-                onSubmit={handleSubmit}
-                placeholder={state.isAgentBusy ? "Type to interrupt..." : "Type a message..."}
-                showCursor
-              />
-            ) : state.connectionState !== "connected" ? (
-              <Text dimColor>Connecting...</Text>
-            ) : (
-              <Text dimColor>Extension dialog active</Text>
-            )}
-          </Box>
+          <Text color={canInput ? "green" : "gray"}>
+            {state.isAgentBusy ? "⏳" : "❯"}{" "}
+          </Text>
+          {canInput ? (
+            <TextInput
+              value={inputValue}
+              onChange={setInputValue}
+              onSubmit={handleSubmit}
+              placeholder={state.isAgentBusy ? "Type to interrupt..." : "Type a message..."}
+              showCursor
+            />
+          ) : state.connectionState !== "connected" ? (
+            <Text dimColor>Connecting...</Text>
+          ) : (
+            <Text dimColor>Extension dialog active</Text>
+          )}
         </Box>
       </Box>
     </Box>
@@ -227,22 +221,45 @@ function StatusBar({ state }: { state: AppState }) {
 }
 
 // =============================================================================
-// Message View (for completed messages in <Static>)
+// Tool Call View
 // =============================================================================
 
-function MessageView({
-  message,
-  width: _width,
-}: {
-  message: CompletedMessage;
-  width: number;
-}) {
+function ToolCallView({ tool, streaming }: { tool: ToolExecution; streaming?: boolean }) {
+  const output = streaming ? tool.output : tool.result;
+  const displayOutput = output ? truncateOutput(output) : undefined;
+
+  return (
+    <Box flexDirection="column" marginLeft={2} marginTop={0}>
+      <Box>
+        <Text color={tool.isError ? "red" : "yellow"}>
+          {tool.done ? (tool.isError ? "✗" : "✓") : "⟳"}{" "}
+        </Text>
+        <Text color="yellow" bold>{tool.name}</Text>
+        {tool.name === "bash" && tool.args && (
+          <Text dimColor> {tool.args}</Text>
+        )}
+        {tool.name !== "bash" && tool.args && (
+          <Text dimColor> ({tool.args})</Text>
+        )}
+      </Box>
+      {displayOutput && (
+        <Box marginLeft={4} flexDirection="column">
+          <Text dimColor>{displayOutput}</Text>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+// =============================================================================
+// Message View (completed messages in <Static>)
+// =============================================================================
+
+function MessageView({ message }: { message: CompletedMessage }) {
   if (message.role === "user") {
     return (
       <Box flexDirection="column" marginTop={1}>
-        <Text bold color="blue">
-          You
-        </Text>
+        <Text bold color="blue">You</Text>
         <Box marginLeft={2}>
           <Text>{message.content}</Text>
         </Box>
@@ -250,18 +267,16 @@ function MessageView({
     );
   }
 
-  // Assistant message
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text bold color="magenta">
-        Assistant
-      </Text>
-      {message.tools?.map((tool, i) => (
-        <Box key={i} marginLeft={2}>
-          <Text dimColor>
-            → {tool.name}({tool.args})
-          </Text>
+      <Text bold color="magenta">Assistant</Text>
+      {message.thinking && (
+        <Box marginLeft={2}>
+          <Text dimColor italic>💭 {truncateOutput(message.thinking)}</Text>
         </Box>
+      )}
+      {message.tools?.map((tool) => (
+        <ToolCallView key={tool.id} tool={tool} />
       ))}
       {message.content && (
         <Box marginLeft={2}>
@@ -278,32 +293,33 @@ function MessageView({
 
 function StreamingArea({
   text,
+  thinking,
   tools,
 }: {
   text: string;
+  thinking: string;
   tools: ToolExecution[];
 }) {
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text bold color="magenta">
-        Assistant
-      </Text>
-      {tools.map((tool, i) => (
-        <Box key={i} marginLeft={2}>
-          <Text dimColor>
-            → {tool.name}({tool.args})
-          </Text>
+      <Text bold color="magenta">Assistant</Text>
+      {thinking && !text && (
+        <Box marginLeft={2}>
+          <Text dimColor italic>💭 {truncateOutput(thinking)}</Text>
         </Box>
+      )}
+      {tools.map((tool) => (
+        <ToolCallView key={tool.id} tool={tool} streaming />
       ))}
       {text ? (
         <Box marginLeft={2}>
           <Text>{text}</Text>
         </Box>
-      ) : (
+      ) : !thinking && tools.length === 0 ? (
         <Box marginLeft={2}>
           <Text dimColor>Thinking...</Text>
         </Box>
-      )}
+      ) : null}
     </Box>
   );
 }
@@ -317,16 +333,11 @@ function ExtensionUIDialog({
   onRespond,
 }: {
   request: ExtensionUIRequest;
-  onRespond: (response: {
-    value?: string;
-    confirmed?: boolean;
-    cancelled?: boolean;
-  }) => void;
+  onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void;
 }) {
   const [inputValue, setInputValue] = useState(request.defaultValue ?? "");
   const [selectedIndex, setSelectedIndex] = useState(0);
 
-  // Select dialog
   if (request.method === "select" && request.options) {
     return (
       <ExtensionUISelect
@@ -339,25 +350,14 @@ function ExtensionUIDialog({
     );
   }
 
-  // Confirm dialog
   if (request.method === "confirm") {
-    return (
-      <ExtensionUIConfirm request={request} onRespond={onRespond} />
-    );
+    return <ExtensionUIConfirm request={request} onRespond={onRespond} />;
   }
 
-  // Input dialog
   if (request.method === "input" || request.method === "editor") {
     return (
-      <Box
-        flexDirection="column"
-        borderStyle="round"
-        borderColor="cyan"
-        paddingX={1}
-      >
-        <Text bold color="cyan">
-          {request.title ?? "Input"}
-        </Text>
+      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+        <Text bold color="cyan">{request.title ?? "Input"}</Text>
         {request.message && <Text>{request.message}</Text>}
         <Box marginTop={1}>
           <Text color="cyan">❯ </Text>
@@ -373,56 +373,32 @@ function ExtensionUIDialog({
     );
   }
 
-  // Fallback
   return (
     <Box borderStyle="round" borderColor="yellow" paddingX={1}>
-      <Text>
-        Extension UI: {request.method} "{request.title}" — not implemented
-      </Text>
+      <Text>Extension UI: {request.method} "{request.title}" — not implemented</Text>
     </Box>
   );
 }
 
-// Select sub-component
 function ExtensionUISelect({
-  request,
-  options,
-  selectedIndex,
-  onSelect,
-  onRespond,
+  request, options, selectedIndex, onSelect, onRespond,
 }: {
   request: ExtensionUIRequest;
   options: Array<{ label: string; value: string }>;
   selectedIndex: number;
   onSelect: (index: number) => void;
-  onRespond: (response: {
-    value?: string;
-    confirmed?: boolean;
-    cancelled?: boolean;
-  }) => void;
+  onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void;
 }) {
-  useInput((input, key) => {
-    if (key.upArrow) {
-      onSelect(Math.max(0, selectedIndex - 1));
-    } else if (key.downArrow) {
-      onSelect(Math.min(options.length - 1, selectedIndex + 1));
-    } else if (key.return) {
-      onRespond({ value: options[selectedIndex]!.value });
-    } else if (key.escape) {
-      onRespond({ cancelled: true });
-    }
+  useInput((_input, key) => {
+    if (key.upArrow) onSelect(Math.max(0, selectedIndex - 1));
+    else if (key.downArrow) onSelect(Math.min(options.length - 1, selectedIndex + 1));
+    else if (key.return) onRespond({ value: options[selectedIndex]!.value });
+    else if (key.escape) onRespond({ cancelled: true });
   });
 
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="round"
-      borderColor="cyan"
-      paddingX={1}
-    >
-      <Text bold color="cyan">
-        {request.title ?? "Select"}
-      </Text>
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text bold color="cyan">{request.title ?? "Select"}</Text>
       {request.message && <Text>{request.message}</Text>}
       {options.map((opt, i) => (
         <Text key={opt.value} color={i === selectedIndex ? "cyan" : undefined}>
@@ -434,36 +410,20 @@ function ExtensionUISelect({
   );
 }
 
-// Confirm sub-component
 function ExtensionUIConfirm({
-  request,
-  onRespond,
+  request, onRespond,
 }: {
   request: ExtensionUIRequest;
-  onRespond: (response: {
-    value?: string;
-    confirmed?: boolean;
-    cancelled?: boolean;
-  }) => void;
+  onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void;
 }) {
   useInput((input, key) => {
-    if (input === "y" || input === "Y") {
-      onRespond({ confirmed: true });
-    } else if (input === "n" || input === "N" || key.escape) {
-      onRespond({ confirmed: false });
-    }
+    if (input === "y" || input === "Y") onRespond({ confirmed: true });
+    else if (input === "n" || input === "N" || key.escape) onRespond({ confirmed: false });
   });
 
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="round"
-      borderColor="cyan"
-      paddingX={1}
-    >
-      <Text bold color="cyan">
-        {request.title ?? "Confirm"}
-      </Text>
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text bold color="cyan">{request.title ?? "Confirm"}</Text>
       {request.message && <Text>{request.message}</Text>}
       <Text dimColor>y/n to confirm · Esc to cancel</Text>
     </Box>
@@ -490,30 +450,55 @@ function handlePiEvent(
       break;
 
     case "message_update": {
-      const evt = payload.assistantMessageEvent as
-        | Record<string, unknown>
-        | undefined;
-      if (evt?.type === "text_delta" && typeof evt.delta === "string") {
+      const evt = payload.assistantMessageEvent as Record<string, unknown> | undefined;
+      if (!evt) break;
+      if (evt.type === "text_delta" && typeof evt.delta === "string") {
         dispatch({ type: "TEXT_DELTA", delta: evt.delta });
+      } else if (evt.type === "thinking_delta" && typeof evt.delta === "string") {
+        dispatch({ type: "THINKING_DELTA", delta: evt.delta });
       }
       break;
     }
 
     case "tool_execution_start": {
+      const toolCallId = (payload.toolCallId as string) ?? `tool-${Date.now()}`;
       const name = (payload.toolName as string) ?? "unknown";
-      const args = payload.args
-        ? JSON.stringify(payload.args).slice(0, 120)
-        : "";
-      dispatch({ type: "TOOL_START", name, args });
+      // For bash, show the command; for others, show truncated args
+      let args = "";
+      if (payload.args) {
+        const argsObj = payload.args as Record<string, unknown>;
+        if (name === "bash" && argsObj.command) {
+          args = String(argsObj.command).slice(0, 120);
+        } else {
+          args = JSON.stringify(argsObj).slice(0, 120);
+        }
+      }
+      dispatch({ type: "TOOL_START", id: toolCallId, name, args });
+      break;
+    }
+
+    case "tool_execution_update": {
+      const toolCallId = payload.toolCallId as string;
+      if (toolCallId && payload.partialResult) {
+        const pr = payload.partialResult as Record<string, unknown>;
+        const text = extractToolText(pr.content);
+        if (text) {
+          dispatch({ type: "TOOL_UPDATE", id: toolCallId, output: text });
+        }
+      }
       break;
     }
 
     case "tool_execution_end": {
-      const isError = payload.isError as boolean;
-      if (isError) {
+      const toolCallId = payload.toolCallId as string;
+      if (toolCallId && payload.result) {
+        const result = payload.result as Record<string, unknown>;
+        const text = extractToolText(result.content);
         dispatch({
-          type: "SET_ERROR",
-          message: `Tool ${payload.toolName} failed`,
+          type: "TOOL_END",
+          id: toolCallId,
+          result: text,
+          isError: (payload.isError as boolean) ?? false,
         });
       }
       break;
@@ -523,16 +508,12 @@ function handlePiEvent(
       const attempt = payload.attempt as number;
       const max = payload.maxAttempts as number;
       const errMsg = payload.errorMessage as string;
-      dispatch({
-        type: "SET_ERROR",
-        message: `Retrying (${attempt}/${max}): ${errMsg}`,
-      });
+      dispatch({ type: "SET_ERROR", message: `Retrying (${attempt}/${max}): ${errMsg}` });
       break;
     }
 
     case "auto_retry_end": {
-      const success = payload.success as boolean;
-      if (success) {
+      if (payload.success) {
         dispatch({ type: "CLEAR_ERROR" });
       } else {
         dispatch({
@@ -544,11 +525,8 @@ function handlePiEvent(
     }
 
     case "response": {
-      const success = (payload as Record<string, unknown>).success;
-      if (success === false) {
-        const error =
-          ((payload as Record<string, unknown>).error as string) ??
-          "Unknown error";
+      if ((payload as Record<string, unknown>).success === false) {
+        const error = ((payload as Record<string, unknown>).error as string) ?? "Unknown error";
         dispatch({ type: "SET_ERROR", message: error });
       }
       break;
@@ -559,32 +537,20 @@ function handlePiEvent(
 function handleExtensionUI(
   request: Record<string, unknown>,
   dispatch: React.Dispatch<import("./state.js").AppAction>,
-  connection: Connection,
+  _connection: Connection,
 ): void {
   const method = request.method as string;
   const id = request.id as string;
 
-  // Fire-and-forget methods — just display info
   if (method === "notify") {
-    // Could show a toast, for now dispatch as system message
-    dispatch({
-      type: "SET_ERROR",
-      message: `ℹ ${request.message as string}`,
-    });
+    dispatch({ type: "SET_ERROR", message: `ℹ ${request.message as string}` });
     return;
   }
-  if (method === "setStatus") {
-    // Status updates could go to the status bar
-    return;
+  if (method === "setStatus" || method === "setWidget" || method === "setTitle") {
+    return; // Silently ignore for now
   }
 
-  // Dialog methods — show UI
-  if (
-    method === "select" ||
-    method === "confirm" ||
-    method === "input" ||
-    method === "editor"
-  ) {
+  if (method === "select" || method === "confirm" || method === "input" || method === "editor") {
     dispatch({
       type: "EXTENSION_UI_REQUEST",
       request: {
@@ -592,9 +558,7 @@ function handleExtensionUI(
         method: method as ExtensionUIRequest["method"],
         title: request.title as string | undefined,
         message: request.message as string | undefined,
-        options: request.options as
-          | Array<{ label: string; value: string }>
-          | undefined,
+        options: request.options as Array<{ label: string; value: string }> | undefined,
         defaultValue: request.defaultValue as string | undefined,
       },
     });
