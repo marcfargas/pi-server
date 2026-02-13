@@ -19,12 +19,15 @@ import { PROTOCOL_VERSION } from "@marcfargas/pi-server-protocol";
 class MockPiTransport implements IPiTransport {
   private handler: PiMessageHandler | null = null;
   private promptScript: Record<string, unknown>[] = [];
+  /** All messages sent to this transport (for assertions) */
+  sent: Record<string, unknown>[] = [];
 
   onMessage(handler: PiMessageHandler): void {
     this.handler = handler;
   }
 
   send(message: Record<string, unknown>): void {
+    this.sent.push(message);
     const type = message.type as string;
 
     // Handle get_state
@@ -342,5 +345,100 @@ describe("WebSocket relay", () => {
     expect(welcome.protocolVersion).toBe(PROTOCOL_VERSION);
 
     ws2.close();
+  });
+
+  it("routes /model to cycle_model RPC", async () => {
+    const transport = new MockPiTransport();
+    server = new WsServer({ port: PORT, piProcess: transport });
+    await server.start();
+
+    const { ws } = await connectAndHandshake(PORT);
+
+    // Clear the sent log (handshake sends get_state + get_messages)
+    transport.sent.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "command",
+      payload: { type: "prompt", message: "/model" },
+    }));
+
+    // Wait for the message to be processed
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Should have sent cycle_model, NOT prompt
+    const rpcMsg = transport.sent.find((m) => m.type === "cycle_model");
+    expect(rpcMsg).toBeDefined();
+    expect(transport.sent.find((m) => m.type === "prompt")).toBeUndefined();
+
+    ws.close();
+  });
+
+  it("routes /model provider/id to set_model RPC", async () => {
+    const transport = new MockPiTransport();
+    server = new WsServer({ port: PORT, piProcess: transport });
+    await server.start();
+
+    const { ws } = await connectAndHandshake(PORT);
+    transport.sent.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "command",
+      payload: { type: "prompt", message: "/model google/gemini-2.5-flash" },
+    }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const rpcMsg = transport.sent.find((m) => m.type === "set_model");
+    expect(rpcMsg).toBeDefined();
+    expect(rpcMsg!.provider).toBe("google");
+    expect(rpcMsg!.modelId).toBe("gemini-2.5-flash");
+
+    ws.close();
+  });
+
+  it("passes unknown /commands through as prompt", async () => {
+    const transport = new MockPiTransport();
+    transport.scriptPrompt([{ type: "agent_start" }, { type: "agent_end" }]);
+    server = new WsServer({ port: PORT, piProcess: transport });
+    await server.start();
+
+    const { ws } = await connectAndHandshake(PORT);
+    transport.sent.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "command",
+      payload: { type: "prompt", message: "/skill:web-search" },
+    }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Should go through as prompt (pi handles extension/skill routing)
+    const promptMsg = transport.sent.find((m) => m.type === "prompt");
+    expect(promptMsg).toBeDefined();
+    expect(promptMsg!.message).toBe("/skill:web-search");
+
+    ws.close();
+  });
+
+  it("routes /compact with instructions", async () => {
+    const transport = new MockPiTransport();
+    server = new WsServer({ port: PORT, piProcess: transport });
+    await server.start();
+
+    const { ws } = await connectAndHandshake(PORT);
+    transport.sent.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "command",
+      payload: { type: "prompt", message: "/compact Focus on architecture" },
+    }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const rpcMsg = transport.sent.find((m) => m.type === "compact");
+    expect(rpcMsg).toBeDefined();
+    expect(rpcMsg!.customInstructions).toBe("Focus on architecture");
+
+    ws.close();
   });
 });
