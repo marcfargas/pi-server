@@ -13,6 +13,7 @@ import React, { useReducer, useCallback, useState, useEffect } from "react";
 import { Box, Text, Static, useApp, useStdout, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { Connection, type ConnectionState } from "./connection.js";
+import { Editor } from "./editor.js";
 import {
   appReducer,
   initialState,
@@ -48,7 +49,6 @@ export default function App({ url }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [state, dispatch] = useReducer(appReducer, initialState);
-  const [inputValue, setInputValue] = useState("");
   const [connection, setConnection] = useState<Connection | null>(null);
 
   const columns = stdout?.columns ?? 80;
@@ -106,7 +106,6 @@ export default function App({ url }: AppProps) {
 
       if (trimmed === "/abort") {
         connection?.sendCommand({ type: "abort" });
-        setInputValue("");
         return;
       }
 
@@ -117,7 +116,6 @@ export default function App({ url }: AppProps) {
         dispatch({ type: "USER_MESSAGE", content: trimmed });
         connection?.sendCommand({ type: "prompt", message: trimmed });
       }
-      setInputValue("");
     },
     [connection, exit, state.isAgentBusy],
   );
@@ -164,24 +162,26 @@ export default function App({ url }: AppProps) {
           />
         )}
 
-        <Box>
-          <Text color={canInput ? "green" : "gray"}>
-            {state.isAgentBusy ? "⏳" : "❯"}{" "}
-          </Text>
-          {canInput ? (
-            <TextInput
-              value={inputValue}
-              onChange={setInputValue}
-              onSubmit={handleSubmit}
-              placeholder={state.isAgentBusy ? "Type to interrupt..." : "Type a message..."}
-              showCursor
-            />
-          ) : state.connectionState !== "connected" ? (
-            <Text dimColor>Connecting...</Text>
-          ) : (
-            <Text dimColor>Extension dialog active</Text>
-          )}
-        </Box>
+        {canInput ? (
+          <Editor
+            onSubmit={handleSubmit}
+            active={canInput}
+            prefix={state.isAgentBusy ? "⏳" : "❯"}
+            prefixColor={state.isAgentBusy ? "yellow" : "green"}
+            placeholder={state.isAgentBusy ? "Type to interrupt... (Ctrl+D to send)" : "Type a message... (Ctrl+D to send)"}
+          />
+        ) : (
+          <Box>
+            <Text color="gray">
+              {state.isAgentBusy ? "⏳" : "❯"}{" "}
+            </Text>
+            {state.connectionState !== "connected" ? (
+              <Text dimColor>Connecting...</Text>
+            ) : (
+              <Text dimColor>Extension dialog active</Text>
+            )}
+          </Box>
+        )}
       </Box>
     </Box>
   );
