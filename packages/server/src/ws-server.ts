@@ -26,12 +26,12 @@ import {
   type ServerExtensionUIRequest,
   type ClientMessage,
 } from "@marcfargas/pi-server-protocol";
-import { type PiProcess } from "./pi-process.js";
+import { type IPiTransport } from "./pi-process.js";
 import { UIBridge } from "./ui-bridge.js";
 
 export interface WsServerOptions {
   port: number;
-  piProcess: PiProcess;
+  piProcess: IPiTransport;
   extensionUITimeoutMs?: number;
 }
 
@@ -41,7 +41,7 @@ export class WsServer {
   private clientId: string | null = null;
   private seq = 0;
   private uiBridge: UIBridge;
-  private piProcess: PiProcess;
+  private piProcess: IPiTransport;
   private port: number;
 
   /** Pending pi commands waiting for response (id → resolve) */

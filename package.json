@@ -1,5 +1,7 @@
 {
   "name": "pi-server",
+  "description": "Detachable agent sessions for pi — headless server + terminal client",
+  "license": "MIT",
   "private": true,
   "workspaces": [
     "packages/protocol",

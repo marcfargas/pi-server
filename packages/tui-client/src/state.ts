@@ -12,14 +12,22 @@ import type { ConnectionState } from "./connection.js";
 // =============================================================================
 
 export interface ToolExecution {
+  id: string;
   name: string;
   args: string;
+  /** Streaming partial output (replaced on each update) */
+  output?: string;
+  /** Final result (set on tool_execution_end) */
+  result?: string;
+  isError?: boolean;
+  done?: boolean;
 }
 
 export interface CompletedMessage {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  thinking?: string;
   tools?: ToolExecution[];
 }
 
@@ -45,7 +53,9 @@ export interface AppState {
 
   /** Currently streaming assistant text */
   streamingText: string;
-  /** Tool calls during current assistant turn */
+  /** Currently streaming thinking text */
+  streamingThinking: string;
+  /** Tool calls during current assistant turn (keyed by toolCallId) */
   streamingTools: ToolExecution[];
 
   /** Whether the agent is processing */
@@ -63,6 +73,7 @@ export const initialState: AppState = {
   serverInfo: null,
   completedMessages: [],
   streamingText: "",
+  streamingThinking: "",
   streamingTools: [],
   isAgentBusy: false,
   extensionUI: null,
@@ -81,7 +92,10 @@ export type AppAction =
   | { type: "AGENT_START" }
   | { type: "AGENT_END" }
   | { type: "TEXT_DELTA"; delta: string }
-  | { type: "TOOL_START"; name: string; args: string }
+  | { type: "THINKING_DELTA"; delta: string }
+  | { type: "TOOL_START"; id: string; name: string; args: string }
+  | { type: "TOOL_UPDATE"; id: string; output: string }
+  | { type: "TOOL_END"; id: string; result: string; isError: boolean }
   | { type: "EXTENSION_UI_REQUEST"; request: ExtensionUIRequest }
   | { type: "EXTENSION_UI_DISMISS" }
   | { type: "SET_ERROR"; message: string }
@@ -131,17 +145,18 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         isAgentBusy: true,
         streamingText: "",
+        streamingThinking: "",
         streamingTools: [],
       };
 
     case "AGENT_END": {
-      // Commit streaming text + tools as a completed assistant message
       const completed: CompletedMessage[] = [...state.completedMessages];
-      if (state.streamingText || state.streamingTools.length > 0) {
+      if (state.streamingText || state.streamingThinking || state.streamingTools.length > 0) {
         completed.push({
           id: `msg-${++messageCounter}`,
           role: "assistant",
           content: state.streamingText,
+          thinking: state.streamingThinking || undefined,
           tools: state.streamingTools.length > 0 ? state.streamingTools : undefined,
         });
       }
@@ -149,6 +164,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         isAgentBusy: false,
         streamingText: "",
+        streamingThinking: "",
         streamingTools: [],
         completedMessages: completed,
       };
@@ -157,13 +173,34 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "TEXT_DELTA":
       return { ...state, streamingText: state.streamingText + action.delta };
 
+    case "THINKING_DELTA":
+      return { ...state, streamingThinking: state.streamingThinking + action.delta };
+
     case "TOOL_START":
       return {
         ...state,
         streamingTools: [
           ...state.streamingTools,
-          { name: action.name, args: action.args },
+          { id: action.id, name: action.name, args: action.args },
         ],
+      };
+
+    case "TOOL_UPDATE":
+      return {
+        ...state,
+        streamingTools: state.streamingTools.map((t) =>
+          t.id === action.id ? { ...t, output: action.output } : t,
+        ),
+      };
+
+    case "TOOL_END":
+      return {
+        ...state,
+        streamingTools: state.streamingTools.map((t) =>
+          t.id === action.id
+            ? { ...t, result: action.result, isError: action.isError, done: true }
+            : t,
+        ),
       };
 
     case "EXTENSION_UI_REQUEST":
@@ -184,48 +221,116 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 }
 
 // =============================================================================
+// Helpers
+// =============================================================================
+
+/** Format tool args for display — bash shows command, others show JSON */
+export function formatToolArgs(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === "bash" && args.command) {
+    return String(args.command).slice(0, 120);
+  }
+  if (toolName === "read" && args.path) {
+    return String(args.path);
+  }
+  if (toolName === "write" && args.path) {
+    return String(args.path);
+  }
+  if (toolName === "edit" && args.path) {
+    return String(args.path);
+  }
+  return JSON.stringify(args).slice(0, 120);
+}
+
+/** Extract text from tool result content blocks */
+export function extractToolText(content: unknown): string {
+  if (!Array.isArray(content)) return String(content ?? "");
+  return (content as Array<Record<string, unknown>>)
+    .filter((b) => b.type === "text")
+    .map((b) => b.text as string)
+    .join("\n");
+}
+
+// =============================================================================
 // History Parsing
 // =============================================================================
 
 /**
  * Parse pi's message history into our display format.
- * Pi messages follow Anthropic's format:
- *   { role: "user"|"assistant", content: string | ContentBlock[] }
  */
 function parseHistoryMessages(raw: unknown[]): CompletedMessage[] {
   const messages: CompletedMessage[] = [];
+  // Collect tool results from user messages to attach to previous assistant
+  const toolResults = new Map<string, { content: string; isError: boolean }>();
 
+  // First pass: collect tool results
+  for (const msg of raw) {
+    const m = msg as Record<string, unknown>;
+    if (m.role === "toolResult") {
+      const content = extractToolText(m.content);
+      toolResults.set(m.toolCallId as string, {
+        content,
+        isError: m.isError as boolean,
+      });
+    }
+  }
+
+  // Second pass: build messages
   for (const msg of raw) {
     const m = msg as Record<string, unknown>;
     const role = m.role as string;
 
-    if (role === "user" || role === "assistant") {
+    if (role === "user") {
       let content = "";
-      const tools: ToolExecution[] = [];
-
       if (typeof m.content === "string") {
         content = m.content;
       } else if (Array.isArray(m.content)) {
-        for (const block of m.content) {
-          const b = block as Record<string, unknown>;
-          if (b.type === "text") {
-            content += b.text as string;
-          } else if (b.type === "tool_use") {
+        for (const block of m.content as Array<Record<string, unknown>>) {
+          if (block.type === "text") content += block.text as string;
+        }
+      }
+      if (content) {
+        messages.push({
+          id: `hist-${++messageCounter}`,
+          role: "user",
+          content,
+        });
+      }
+    }
+
+    if (role === "assistant") {
+      let content = "";
+      let thinking = "";
+      const tools: ToolExecution[] = [];
+
+      if (Array.isArray(m.content)) {
+        for (const block of m.content as Array<Record<string, unknown>>) {
+          if (block.type === "text") {
+            content += block.text as string;
+          } else if (block.type === "thinking") {
+            thinking += block.thinking as string;
+          } else if (block.type === "toolCall") {
+            const toolId = block.id as string;
+            const toolName = block.name as string;
+            const argsObj = (block.arguments ?? {}) as Record<string, unknown>;
+            const result = toolResults.get(toolId);
             tools.push({
-              name: b.name as string,
-              args: JSON.stringify(b.input).slice(0, 120),
+              id: toolId,
+              name: toolName,
+              args: formatToolArgs(toolName, argsObj),
+              result: result?.content,
+              isError: result?.isError,
+              done: true,
             });
-          } else if (b.type === "tool_result") {
-            // Tool results are usually in user messages, skip for display
           }
         }
       }
 
-      if (content || tools.length > 0) {
+      if (content || thinking || tools.length > 0) {
         messages.push({
           id: `hist-${++messageCounter}`,
-          role: role as "user" | "assistant",
+          role: "assistant",
           content,
+          thinking: thinking || undefined,
           tools: tools.length > 0 ? tools : undefined,
         });
       }
