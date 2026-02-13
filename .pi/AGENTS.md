@@ -27,3 +27,9 @@ English — all code, docs, and commits.
 - npm workspaces for package management
 - Tests with vitest
 - Conventional commits
+
+## Skills
+
+### `manual-test`
+Load with `/skill:manual-test` or read `.pi/skills/manual-test/SKILL.md` before any manual testing.
+Covers: launching server+client via holdpty, raw WebSocket probes, event inspection, reconnect testing, reading Ink TUI output from detached terminals. **Load this skill whenever testing the TUI or debugging the WebSocket relay.**
