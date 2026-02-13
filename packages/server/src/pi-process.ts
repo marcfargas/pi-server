@@ -10,6 +10,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 
+/**
+ * Minimal transport interface used by WsServer.
+ * PiProcess implements this via child process. Tests can provide a mock.
+ */
+export interface IPiTransport {
+  onMessage(handler: PiMessageHandler): void;
+  send(message: Record<string, unknown>): void;
+}
+
 export interface PiProcessOptions {
   /** Working directory for the pi process */
   cwd: string;
@@ -23,7 +32,7 @@ export interface PiProcessOptions {
 
 export type PiMessageHandler = (message: Record<string, unknown>) => void;
 
-export class PiProcess {
+export class PiProcess implements IPiTransport {
   private process: ChildProcess | null = null;
   private readline: Interface | null = null;
   private messageHandler: PiMessageHandler | null = null;
