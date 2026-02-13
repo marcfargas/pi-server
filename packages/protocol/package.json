@@ -1,6 +1,6 @@
 {
   "name": "@marcfargas/pi-server-protocol",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Wire protocol types for pi-server — detachable agent sessions over WebSocket",
   "type": "module",
   "main": "dist/index.js",

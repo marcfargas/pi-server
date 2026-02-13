@@ -1,6 +1,6 @@
 {
   "name": "@marcfargas/pi-server",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Headless pi agent server — detachable sessions over WebSocket",
   "type": "module",
   "main": "dist/index.js",
@@ -49,7 +49,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@marcfargas/pi-server-protocol": "0.2.0",
+    "@marcfargas/pi-server-protocol": "0.3.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
