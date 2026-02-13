@@ -9,5 +9,5 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["pi-server", "pi-client", "pi-serve"]
+  "ignore": []
 }
