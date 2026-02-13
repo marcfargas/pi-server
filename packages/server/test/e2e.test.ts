@@ -12,7 +12,7 @@ import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 import { PiProcess } from "../src/pi-process.js";
 import { WsServer } from "../src/ws-server.js";
-import { PROTOCOL_VERSION } from "@pi-server/protocol";
+import { PROTOCOL_VERSION } from "@marcfargas/pi-server-protocol";
 
 const PORT = 3335;
 const TIMEOUT_MS = 30_000;

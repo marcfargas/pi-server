@@ -1,5 +1,5 @@
 /**
- * @pi-server/server — Headless pi agent server
+ * @marcfargas/pi-server — Headless pi agent server
  */
 
 export { PiProcess, type PiProcessOptions, type PiMessageHandler } from "./pi-process.js";

@@ -15,7 +15,7 @@ import {
   type ServerError,
   type ClientCommandMessage,
   type ClientExtensionUIResponse,
-} from "@pi-server/protocol";
+} from "@marcfargas/pi-server-protocol";
 
 export type ConnectionState = "disconnected" | "connecting" | "handshaking" | "connected";
 

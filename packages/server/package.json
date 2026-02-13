@@ -1,7 +1,7 @@
 {
-  "name": "@pi-server/server",
+  "name": "@marcfargas/pi-server",
   "version": "0.1.0",
-  "description": "Headless pi agent server — wraps pi --mode rpc over WebSocket",
+  "description": "Headless pi agent server — detachable sessions over WebSocket",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,7 +12,8 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./cli": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
@@ -20,8 +21,22 @@
     "dev": "tsc --watch",
     "test": "vitest run"
   },
+  "keywords": ["pi", "agent", "server", "websocket", "detachable", "sessions", "coding-agent"],
+  "license": "MIT",
+  "author": "Marc Fargas",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marcfargas/pi-server",
+    "directory": "packages/server"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
-    "@pi-server/protocol": "*",
+    "@marcfargas/pi-server-protocol": "0.1.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
+  "changelog": ["@changesets/changelog-github", { "repo": "marcfargas/pi-server" }],
+  "commit": false,
+  "fixed": [],
+  "linked": [
+    ["@marcfargas/pi-server", "@marcfargas/pi-client", "@marcfargas/pi-server-protocol"]
+  ],
+  "access": "public",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "ignore": ["pi-server", "pi-client", "pi-serve"]
+}
