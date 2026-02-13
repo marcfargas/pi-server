@@ -1,5 +1,5 @@
 /**
- * @pi-server/protocol — Wire protocol for pi-server
+ * @marcfargas/pi-server-protocol — Wire protocol for pi-server
  *
  * Defines the messages exchanged between pi-server and its clients over WebSocket.
  * All packages in the pi-server monorepo import types from here.

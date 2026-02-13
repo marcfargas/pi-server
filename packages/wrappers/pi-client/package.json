@@ -1,0 +1,18 @@
+{
+  "name": "pi-client",
+  "version": "0.1.0",
+  "description": "Namespace reservation for @marcfargas/pi-client. This package exists solely to prevent supply-chain attacks via npm name squatting. Install @marcfargas/pi-client for the real package.",
+  "type": "module",
+  "bin": {
+    "pi-client": "./cli.js"
+  },
+  "dependencies": {
+    "@marcfargas/pi-client": "0.1.0"
+  },
+  "license": "MIT",
+  "author": "Marc Fargas",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marcfargas/pi-server"
+  }
+}

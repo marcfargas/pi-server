@@ -164,35 +164,56 @@ export class PiProcess {
 
   /**
    * Find the pi CLI entry point.
-   * Resolves .cmd shims on Windows to the actual .js file.
+   *
+   * Uses `where` on Windows and `which` on Unix to locate the pi shim,
+   * then parses the shim to extract the actual .js entry point path.
+   * On Windows, `which` returns POSIX paths that Node's fs can't read,
+   * so we always prefer `where` (returns native Windows paths).
    */
   private async findPiCli(): Promise<string> {
-    // Try to find pi in PATH and resolve to .js
     const { execSync } = await import("node:child_process");
+    const { readFileSync, existsSync } = await import("node:fs");
+    const { dirname, resolve } = await import("node:path");
+    const isWindows = process.platform === "win32";
+
     try {
-      const whichResult = execSync("which pi", { encoding: "utf8" }).trim();
-      // On Windows, .cmd shims contain the actual .js path
-      if (whichResult.endsWith(".cmd")) {
-        const { readFileSync } = await import("node:fs");
-        const cmdContent = readFileSync(whichResult, "utf8");
-        const match = cmdContent.match(/node_modules[/\\].*?\.js/);
+      // Locate shim files — `where` on Windows (native paths), `which` on Unix
+      const locateCmd = isWindows ? "where pi" : "which pi";
+      const locateResult = execSync(locateCmd, { encoding: "utf8" }).trim();
+      const candidates = locateResult.split("\n").map(s => s.trim()).filter(Boolean);
+
+      // Try each candidate (prefer .cmd on Windows since `where` lists both)
+      for (const shimPath of candidates) {
+        if (!existsSync(shimPath)) continue;
+
+        const content = readFileSync(shimPath, "utf8");
+
+        // Match the node_modules/...cli.js path (handles both / and \ separators)
+        const match = content.match(/node_modules[\\/][^\s"]+\.js/);
         if (match) {
-          // Reconstruct absolute path from the shim
-          const { dirname, resolve } = await import("node:path");
-          return resolve(dirname(whichResult), match[0]);
+          const resolved = resolve(dirname(shimPath), match[0]);
+          if (existsSync(resolved)) {
+            return resolved;
+          }
         }
       }
-      // On Unix, the shim script also references the .js file
-      const { readFileSync } = await import("node:fs");
-      const content = readFileSync(whichResult, "utf8");
-      const match = content.match(/"([^"]*cli\.js)"/);
-      if (match) {
-        const { dirname, resolve } = await import("node:path");
-        return resolve(dirname(whichResult), match[1]);
+
+      // Fallback: check npm global root directly
+      try {
+        const npmRoot = execSync("npm root -g", { encoding: "utf8" }).trim();
+        const globalCliPath = resolve(npmRoot, "@mariozechner", "pi-coding-agent", "dist", "cli.js");
+        if (existsSync(globalCliPath)) {
+          return globalCliPath;
+        }
+      } catch {
+        // npm root -g failed, continue to error
       }
-      // Fallback: assume it's directly executable
-      return whichResult;
-    } catch {
+
+      throw new Error("Could not resolve pi CLI .js entry point from shim files");
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("Could not resolve")) {
+        throw err;
+      }
       throw new Error(
         "Could not find pi CLI. Install it globally or pass --pi-cli-path."
       );

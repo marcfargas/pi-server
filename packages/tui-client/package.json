@@ -1,7 +1,7 @@
 {
-  "name": "@pi-server/tui-client",
-  "version": "0.1.0",
-  "description": "Terminal TUI client for pi-server (Ink/React)",
+  "name": "@marcfargas/pi-client",
+  "version": "0.2.0",
+  "description": "Terminal TUI client for pi-server — detachable agent sessions",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,24 +12,52 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./cli": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist",
-    "dev": "tsc --watch",
-    "test": "vitest run"
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "pi",
+    "agent",
+    "client",
+    "tui",
+    "terminal",
+    "ink",
+    "websocket",
+    "coding-agent"
+  ],
+  "license": "MIT",
+  "author": "Marc Fargas",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marcfargas/pi-server",
+    "directory": "packages/tui-client"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "dependencies": {
-    "@pi-server/protocol": "*",
-    "ws": "^8.18.0",
+    "@marcfargas/pi-server-protocol": "0.2.0",
     "ink": "^5.1.0",
-    "react": "^18.3.0"
+    "ink-text-input": "^6.0.0",
+    "react": "^18.3.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/ws": "^8.5.0",
     "@types/react": "^18.3.0",
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.7.0"
   }
 }

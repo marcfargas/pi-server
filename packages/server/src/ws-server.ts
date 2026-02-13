@@ -25,7 +25,7 @@ import {
   type ServerEventMessage,
   type ServerExtensionUIRequest,
   type ClientMessage,
-} from "@pi-server/protocol";
+} from "@marcfargas/pi-server-protocol";
 import { type PiProcess } from "./pi-process.js";
 import { UIBridge } from "./ui-bridge.js";
 

@@ -15,7 +15,7 @@ import {
   type ServerError,
   type ClientCommandMessage,
   type ClientExtensionUIResponse,
-} from "@pi-server/protocol";
+} from "@marcfargas/pi-server-protocol";
 
 export type ConnectionState = "disconnected" | "connecting" | "handshaking" | "connected";
 
@@ -40,6 +40,7 @@ export class Connection {
   private state: ConnectionState = "disconnected";
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSeq = 0;
+  private intentionalDisconnect = false;
 
   constructor(url: string, events: ConnectionEvents) {
     this.url = url;
@@ -53,6 +54,7 @@ export class Connection {
   connect(): void {
     if (this.ws) return;
 
+    this.intentionalDisconnect = false;
     this.setState("connecting");
     this.ws = new WebSocket(this.url);
 
@@ -82,7 +84,9 @@ export class Connection {
     this.ws.on("close", () => {
       this.ws = null;
       this.setState("disconnected");
-      this.scheduleReconnect();
+      if (!this.intentionalDisconnect) {
+        this.scheduleReconnect();
+      }
     });
 
     this.ws.on("error", () => {
@@ -94,6 +98,7 @@ export class Connection {
    * Disconnect without reconnecting.
    */
   disconnect(): void {
+    this.intentionalDisconnect = true;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

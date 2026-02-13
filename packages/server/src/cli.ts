@@ -3,8 +3,13 @@
  * pi-server CLI
  *
  * Usage:
- *   pi-server serve --port 3333 --cwd /path/to/project
- *   pi-server serve --port 3333 --pi-args "--provider anthropic --model claude-sonnet-4-5"
+ *   pi-server serve [options] [-- pi-options...]
+ *
+ * Everything before -- is for pi-server. Everything after -- is passed to pi.
+ *
+ * Examples:
+ *   pi-server serve --port 3333 -- --provider google --model gemini-2.5-flash
+ *   pi-server serve -- --provider anthropic --model claude-sonnet-4-5 --no-session
  */
 
 import { PiProcess } from "./pi-process.js";
@@ -14,38 +19,42 @@ interface ServeOptions {
   port: number;
   cwd: string;
   piCliPath?: string;
-  piArgs?: string[];
   extensionUITimeoutMs?: number;
+  piArgs: string[];
 }
 
 function parseArgs(args: string[]): ServeOptions {
   const options: ServeOptions = {
     port: 3333,
     cwd: process.cwd(),
+    piArgs: [],
   };
 
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
+  // Split on -- separator
+  const ddIndex = args.indexOf("--");
+  const serverArgs = ddIndex >= 0 ? args.slice(0, ddIndex) : args;
+  const piArgs = ddIndex >= 0 ? args.slice(ddIndex + 1) : [];
+  options.piArgs = piArgs;
+
+  for (let i = 0; i < serverArgs.length; i++) {
+    const arg = serverArgs[i]!;
     switch (arg) {
       case "--port":
       case "-p":
-        options.port = parseInt(args[++i], 10);
+        options.port = parseInt(serverArgs[++i]!, 10);
         if (isNaN(options.port)) {
           console.error("Invalid port number");
           process.exit(1);
         }
         break;
       case "--cwd":
-        options.cwd = args[++i];
+        options.cwd = serverArgs[++i]!;
         break;
       case "--pi-cli-path":
-        options.piCliPath = args[++i];
-        break;
-      case "--pi-args":
-        options.piArgs = args[++i]?.split(" ");
+        options.piCliPath = serverArgs[++i]!;
         break;
       case "--ui-timeout":
-        options.extensionUITimeoutMs = parseInt(args[++i], 10);
+        options.extensionUITimeoutMs = parseInt(serverArgs[++i]!, 10);
         break;
       case "--help":
       case "-h":
@@ -53,11 +62,10 @@ function parseArgs(args: string[]): ServeOptions {
         process.exit(0);
         break;
       case "serve":
-        // subcommand, skip
         break;
       default:
         if (arg.startsWith("-")) {
-          console.error(`Unknown option: ${arg}`);
+          console.error(`Unknown option: ${arg}\nUse -- to pass options to pi: pi-server serve -- ${arg}`);
           process.exit(1);
         }
     }
@@ -70,15 +78,23 @@ function printHelp(): void {
   console.log(`pi-server — Detachable agent sessions over WebSocket
 
 Usage:
-  pi-server serve [options]
+  pi-server serve [options] [-- pi-options...]
 
-Options:
+Server options (before --):
   --port, -p <number>    WebSocket port (default: 3333)
   --cwd <path>           Working directory for pi (default: current dir)
   --pi-cli-path <path>   Path to pi CLI entry point (default: auto-detect)
-  --pi-args <args>       Additional arguments for pi (space-separated, quoted)
-  --ui-timeout <ms>      Extension UI timeout in ms (default: 60000)
+  --ui-timeout <ms>      Extension UI dialog timeout in ms (default: 60000)
   --help, -h             Show this help
+
+Pi options (after --):
+  Everything after -- is passed directly to pi. See pi --help for all options.
+  Common: --provider, --model, --no-session, --no-extensions, --no-skills
+
+Examples:
+  pi-server serve -- --provider google --model gemini-2.5-flash
+  pi-server serve --port 9090 -- --provider anthropic --model claude-sonnet-4-5
+  pi-server serve --cwd /path/to/project -- --no-extensions --no-skills
 `);
 }
 
@@ -100,17 +116,19 @@ async function main(): Promise<void> {
   console.log(`Starting pi-server...`);
   console.log(`  Port: ${options.port}`);
   console.log(`  CWD:  ${options.cwd}`);
+  if (options.piArgs.length > 0) console.log(`  Pi:   ${options.piArgs.join(" ")}`);
 
   // Start pi process
   const piProcess = new PiProcess({
     cwd: options.cwd,
     piCliPath: options.piCliPath,
-    piArgs: options.piArgs,
+    piArgs: options.piArgs.length > 0 ? options.piArgs : undefined,
   });
 
   piProcess.onExit((code, signal) => {
     console.error(`Pi process exited (code=${code}, signal=${signal})`);
-    console.error(`Stderr: ${piProcess.getStderr()}`);
+    const stderr = piProcess.getStderr();
+    if (stderr) console.error(`Stderr: ${stderr}`);
     process.exit(1);
   });
 
@@ -130,8 +148,8 @@ async function main(): Promise<void> {
   });
 
   await wsServer.start();
-  console.log(`  WebSocket server listening on ws://localhost:${options.port}`);
-  console.log(`\nReady. Connect with: pi-server connect ws://localhost:${options.port}`);
+  console.log(`  WebSocket listening on ws://localhost:${options.port}`);
+  console.log(`\nReady. Connect with: pi-client connect ws://localhost:${options.port}`);
 
   // Graceful shutdown
   const shutdown = async () => {
