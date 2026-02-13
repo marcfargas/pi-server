@@ -1,0 +1,35 @@
+{
+  "name": "@pi-server/tui-client",
+  "version": "0.1.0",
+  "description": "Terminal TUI client for pi-server (Ink/React)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "pi-client": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "dev": "tsc --watch",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@pi-server/protocol": "*",
+    "ws": "^8.18.0",
+    "ink": "^5.1.0",
+    "react": "^18.3.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
