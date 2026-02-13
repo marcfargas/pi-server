@@ -1,5 +1,11 @@
 # @marcfargas/pi-server-protocol
 
+## 0.3.0
+
+### Patch Changes
+
+- [`d62cc3f`](https://github.com/marcfargas/pi-server/commit/d62cc3f0b038f194e9b9f29bcd335aef8e1dcbeb) Thanks [@marcfargas](https://github.com/marcfargas)! - No protocol changes — patch bump for monorepo consistency.
+
 ## 0.2.0
 
 ### Minor Changes

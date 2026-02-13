@@ -1,5 +1,20 @@
 # @marcfargas/pi-server
 
+## 0.3.0
+
+### Minor Changes
+
+- [`d62cc3f`](https://github.com/marcfargas/pi-server/commit/d62cc3f0b038f194e9b9f29bcd335aef8e1dcbeb) Thanks [@marcfargas](https://github.com/marcfargas)! - IPiTransport interface and relay test infrastructure.
+
+  - **IPiTransport interface**: extracted from PiProcess — WsServer now accepts any transport implementation, enabling testing without a real pi process.
+  - **Tool execution relay**: full event lifecycle (start → update → end) properly forwarded over WebSocket.
+  - **Thinking relay**: thinking_delta events forwarded to clients.
+
+### Patch Changes
+
+- Updated dependencies [[`d62cc3f`](https://github.com/marcfargas/pi-server/commit/d62cc3f0b038f194e9b9f29bcd335aef8e1dcbeb)]:
+  - @marcfargas/pi-server-protocol@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes
