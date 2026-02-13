@@ -1,6 +1,6 @@
 {
   "name": "@marcfargas/pi-server-protocol",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Wire protocol types for pi-server — detachable agent sessions over WebSocket",
   "type": "module",
   "main": "dist/index.js",
@@ -11,12 +11,22 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist"
   },
-  "keywords": ["pi", "agent", "rpc", "protocol", "websocket"],
+  "keywords": [
+    "pi",
+    "agent",
+    "rpc",
+    "protocol",
+    "websocket"
+  ],
   "license": "MIT",
   "author": "Marc Fargas",
   "repository": {
