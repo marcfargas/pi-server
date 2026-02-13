@@ -15,6 +15,7 @@
     },
     "./cli": "./dist/cli.js"
   },
+  "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist",
