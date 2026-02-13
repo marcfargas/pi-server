@@ -236,12 +236,7 @@ function ToolCallView({ tool, streaming }: { tool: ToolExecution; streaming?: bo
           {tool.done ? (tool.isError ? "✗" : "✓") : "⟳"}{" "}
         </Text>
         <Text color="yellow" bold>{tool.name}</Text>
-        {tool.name === "bash" && tool.args && (
-          <Text dimColor> {tool.args}</Text>
-        )}
-        {tool.name !== "bash" && tool.args && (
-          <Text dimColor> ({tool.args})</Text>
-        )}
+        {tool.args && <Text dimColor> {tool.args}</Text>}
       </Box>
       {displayOutput && (
         <Box marginLeft={4} flexDirection="column">
