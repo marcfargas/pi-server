@@ -26,10 +26,10 @@ Pi is a powerful coding agent, but it's tied to your terminal. Close the tab, lo
 
 ```bash
 # Terminal 1 — start the server
-npx @marcfargas/pi-server serve --provider google --model gemini-2.5-flash
+npx pi-server serve -- --provider google --model gemini-2.5-flash
 
 # Terminal 2 — connect
-npx @marcfargas/pi-client connect ws://localhost:3333
+npx pi-client connect ws://localhost:3333
 ```
 
 Type a message, see streaming responses. Close the client, reopen it — your conversation is still there.
@@ -47,14 +47,24 @@ Unscoped convenience packages (`pi-server`, `pi-client`, `pi-serve`) are thin wr
 ## Server Options
 
 ```
-pi-server serve [options]
+pi-server serve [options] [-- pi-options...]
 
+Server options (before --):
   --port, -p <number>    WebSocket port (default: 3333)
   --cwd <path>           Working directory for pi
-  --provider <name>      LLM provider (google, anthropic, openai, ...)
-  --model <id>           Model ID (gemini-2.5-flash, claude-sonnet-4-5, ...)
-  --pi-args <args>       Extra arguments for pi (quoted, space-separated)
+  --pi-cli-path <path>   Path to pi CLI (default: auto-detect)
   --ui-timeout <ms>      Extension UI dialog timeout (default: 60000)
+
+Pi options (after --):
+  Passed directly to pi. See pi --help. Common:
+  --provider, --model, --no-session, --no-extensions, --no-skills
+```
+
+```bash
+# Examples
+pi-server serve -- --provider google --model gemini-2.5-flash
+pi-server serve --port 9090 -- --provider anthropic --model claude-sonnet-4-5
+pi-server serve --cwd /path/to/project -- --no-extensions
 ```
 
 ## Protocol
