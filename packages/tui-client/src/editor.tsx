@@ -2,17 +2,19 @@
  * Multi-line text editor component for Ink.
  *
  * - Enter: new line
- * - Ctrl+Enter or Ctrl+D: submit
- * - Arrow keys: navigate
+ * - Ctrl+D: submit
+ * - Up/Down on empty first line: navigate message history
+ * - Arrow keys: navigate within text
  * - Backspace/Delete: delete characters
  * - Home/End: jump to line start/end
+ * - Tab: insert 2 spaces
  */
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef } from "react";
 import { Box, Text, useInput } from "ink";
 
 export interface EditorProps {
-  /** Called when the user submits (Ctrl+Enter or Ctrl+D) */
+  /** Called when the user submits (Ctrl+D) */
   onSubmit: (text: string) => void;
   /** Placeholder when empty */
   placeholder?: string;
@@ -22,6 +24,8 @@ export interface EditorProps {
   prefix?: string;
   /** Prefix color */
   prefixColor?: string;
+  /** Message history (newest last) */
+  history?: string[];
 }
 
 interface CursorPos {
@@ -31,13 +35,27 @@ interface CursorPos {
 
 export function Editor({
   onSubmit,
-  placeholder = "Type a message... (Ctrl+Enter to send)",
+  placeholder = "Type a message... (Ctrl+D to send)",
   active = true,
   prefix = "❯",
   prefixColor = "green",
+  history = [],
 }: EditorProps) {
   const [lines, setLines] = useState<string[]>([""]);
   const [cursor, setCursor] = useState<CursorPos>({ line: 0, col: 0 });
+  // History navigation: -1 = not browsing, 0..N = index from end
+  const [historyOffset, setHistoryOffset] = useState(-1);
+  // Save current draft when entering history
+  const draftRef = useRef<string>("");
+
+  const isEmpty = lines.length === 1 && lines[0] === "";
+
+  const setFromText = useCallback((text: string) => {
+    const newLines = text.split("\n");
+    setLines(newLines);
+    const lastLine = newLines[newLines.length - 1] ?? "";
+    setCursor({ line: newLines.length - 1, col: lastLine.length });
+  }, []);
 
   const submit = useCallback(() => {
     const text = lines.join("\n").trim();
@@ -45,23 +63,22 @@ export function Editor({
     onSubmit(text);
     setLines([""]);
     setCursor({ line: 0, col: 0 });
+    setHistoryOffset(-1);
+    draftRef.current = "";
   }, [lines, onSubmit]);
 
   useInput(
     (input, key) => {
       if (!active) return;
 
-      // Ctrl+D or Ctrl+Enter: submit
+      // Ctrl+D: submit
       if (input === "\x04") {
         submit();
         return;
       }
 
-      // Enter
+      // Enter = newline
       if (key.return) {
-        // Check for ctrl modifier — ink doesn't expose ctrl+enter directly,
-        // but we handle Ctrl+D above as the primary submit shortcut.
-        // Plain Enter = newline.
         setLines((prev) => {
           const newLines = [...prev];
           const currentLine = newLines[cursor.line] ?? "";
@@ -72,13 +89,13 @@ export function Editor({
           return newLines;
         });
         setCursor((prev) => ({ line: prev.line + 1, col: 0 }));
+        setHistoryOffset(-1);
         return;
       }
 
       // Backspace
       if (key.backspace || key.delete) {
         if (cursor.col > 0) {
-          // Delete char before cursor
           setLines((prev) => {
             const newLines = [...prev];
             const line = newLines[cursor.line] ?? "";
@@ -87,7 +104,6 @@ export function Editor({
           });
           setCursor((prev) => ({ ...prev, col: prev.col - 1 }));
         } else if (cursor.line > 0) {
-          // Merge with previous line
           const prevLineLen = lines[cursor.line - 1]?.length ?? 0;
           setLines((prev) => {
             const newLines = [...prev];
@@ -98,15 +114,57 @@ export function Editor({
           });
           setCursor({ line: cursor.line - 1, col: prevLineLen });
         }
+        setHistoryOffset(-1);
         return;
       }
 
-      // Arrow keys
+      // Up arrow — history navigation when on first line, else move up
+      if (key.upArrow) {
+        if (cursor.line === 0 && history.length > 0) {
+          // Navigate history
+          const newOffset = historyOffset === -1 ? 0 : Math.min(historyOffset + 1, history.length - 1);
+          if (newOffset !== historyOffset) {
+            if (historyOffset === -1) {
+              // Save current draft
+              draftRef.current = lines.join("\n");
+            }
+            setHistoryOffset(newOffset);
+            const histEntry = history[history.length - 1 - newOffset] ?? "";
+            setFromText(histEntry);
+          }
+        } else if (cursor.line > 0) {
+          const prevLen = lines[cursor.line - 1]?.length ?? 0;
+          setCursor({ line: cursor.line - 1, col: Math.min(cursor.col, prevLen) });
+        }
+        return;
+      }
+
+      // Down arrow — history navigation or move down
+      if (key.downArrow) {
+        if (historyOffset >= 0 && cursor.line === lines.length - 1) {
+          // Navigate history forward
+          const newOffset = historyOffset - 1;
+          if (newOffset < 0) {
+            // Back to draft
+            setHistoryOffset(-1);
+            setFromText(draftRef.current);
+          } else {
+            setHistoryOffset(newOffset);
+            const histEntry = history[history.length - 1 - newOffset] ?? "";
+            setFromText(histEntry);
+          }
+        } else if (cursor.line < lines.length - 1) {
+          const nextLen = lines[cursor.line + 1]?.length ?? 0;
+          setCursor({ line: cursor.line + 1, col: Math.min(cursor.col, nextLen) });
+        }
+        return;
+      }
+
+      // Left/Right arrows
       if (key.leftArrow) {
         if (cursor.col > 0) {
           setCursor((prev) => ({ ...prev, col: prev.col - 1 }));
         } else if (cursor.line > 0) {
-          // Wrap to end of previous line
           const prevLen = lines[cursor.line - 1]?.length ?? 0;
           setCursor({ line: cursor.line - 1, col: prevLen });
         }
@@ -118,24 +176,7 @@ export function Editor({
         if (cursor.col < lineLen) {
           setCursor((prev) => ({ ...prev, col: prev.col + 1 }));
         } else if (cursor.line < lines.length - 1) {
-          // Wrap to start of next line
           setCursor({ line: cursor.line + 1, col: 0 });
-        }
-        return;
-      }
-
-      if (key.upArrow) {
-        if (cursor.line > 0) {
-          const prevLen = lines[cursor.line - 1]?.length ?? 0;
-          setCursor({ line: cursor.line - 1, col: Math.min(cursor.col, prevLen) });
-        }
-        return;
-      }
-
-      if (key.downArrow) {
-        if (cursor.line < lines.length - 1) {
-          const nextLen = lines[cursor.line + 1]?.length ?? 0;
-          setCursor({ line: cursor.line + 1, col: Math.min(cursor.col, nextLen) });
         }
         return;
       }
@@ -149,10 +190,11 @@ export function Editor({
           return newLines;
         });
         setCursor((prev) => ({ ...prev, col: prev.col + 2 }));
+        setHistoryOffset(-1);
         return;
       }
 
-      // Escape: ignore (don't insert)
+      // Escape: ignore
       if (key.escape) return;
 
       // Regular character input
@@ -164,16 +206,15 @@ export function Editor({
           return newLines;
         });
         setCursor((prev) => ({ ...prev, col: prev.col + input.length }));
+        setHistoryOffset(-1);
       }
     },
     { isActive: active },
   );
 
-  const isEmpty = lines.length === 1 && lines[0] === "";
-
   return (
     <Box flexDirection="column">
-      {isEmpty ? (
+      {isEmpty && historyOffset === -1 ? (
         <Box>
           <Text color={prefixColor}>{prefix} </Text>
           <Text dimColor>{placeholder}</Text>

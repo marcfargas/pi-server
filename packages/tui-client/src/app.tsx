@@ -50,6 +50,7 @@ export default function App({ url }: AppProps) {
   const { stdout } = useStdout();
   const [state, dispatch] = useReducer(appReducer, initialState);
   const [connection, setConnection] = useState<Connection | null>(null);
+  const [inputHistory, setInputHistory] = useState<string[]>([]);
 
   const columns = stdout?.columns ?? 80;
 
@@ -98,17 +99,46 @@ export default function App({ url }: AppProps) {
       const trimmed = text.trim();
       if (!trimmed) return;
 
-      if (trimmed === "/quit" || trimmed === "/exit") {
+      // Add to input history (dedup consecutive)
+      setInputHistory((prev) => {
+        if (prev[prev.length - 1] === trimmed) return prev;
+        return [...prev, trimmed];
+      });
+
+      // --- Client commands: !prefix (never clash with pi's / commands) ---
+      if (trimmed === "//quit" || trimmed === "//exit") {
         connection?.disconnect();
         exit();
         return;
       }
 
-      if (trimmed === "/abort") {
-        connection?.sendCommand({ type: "abort" });
+      if (trimmed === "//help") {
+        dispatch({
+          type: "USER_MESSAGE",
+          content: [
+            "Client: //quit //help //clear //status",
+            "Everything else goes to pi — /commands, /skill:name, /templates, plain text",
+            "Ctrl+D to send · Enter for newline · ↑↓ for history",
+          ].join("\n"),
+        });
         return;
       }
 
+      if (trimmed === "//clear") {
+        dispatch({ type: "LOAD_HISTORY", messages: [] });
+        return;
+      }
+
+      if (trimmed === "//status") {
+        const info = state.serverInfo;
+        dispatch({
+          type: "USER_MESSAGE",
+          content: `Connection: ${state.connectionState} | Server: ${info?.serverId ?? "?"} | Model: ${info?.model ?? "?"} | Protocol: v${info?.protocolVersion ?? "?"}`,
+        });
+        return;
+      }
+
+      // --- Everything else goes to pi (slash commands, text, skills, extensions) ---
       if (state.isAgentBusy) {
         dispatch({ type: "USER_MESSAGE", content: `[steer] ${trimmed}` });
         connection?.sendCommand({ type: "prompt", message: trimmed, streamingBehavior: "steer" });
@@ -117,7 +147,7 @@ export default function App({ url }: AppProps) {
         connection?.sendCommand({ type: "prompt", message: trimmed });
       }
     },
-    [connection, exit, state.isAgentBusy],
+    [connection, exit, state.isAgentBusy, state.serverInfo, state.connectionState],
   );
 
   const handleExtensionUIResponse = useCallback(
@@ -169,6 +199,7 @@ export default function App({ url }: AppProps) {
             prefix={state.isAgentBusy ? "⏳" : "❯"}
             prefixColor={state.isAgentBusy ? "yellow" : "green"}
             placeholder={state.isAgentBusy ? "Type to interrupt... (Ctrl+D to send)" : "Type a message... (Ctrl+D to send)"}
+            history={inputHistory}
           />
         ) : (
           <Box>
@@ -512,8 +543,9 @@ function handlePiEvent(
     }
 
     case "response": {
-      if ((payload as Record<string, unknown>).success === false) {
-        const error = ((payload as Record<string, unknown>).error as string) ?? "Unknown error";
+      const resp = payload as Record<string, unknown>;
+      if (resp.success === false) {
+        const error = (resp.error as string) ?? "Unknown error";
         dispatch({ type: "SET_ERROR", message: error });
       }
       break;
