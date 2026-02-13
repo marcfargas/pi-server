@@ -224,6 +224,23 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 // Helpers
 // =============================================================================
 
+/** Format tool args for display — bash shows command, others show JSON */
+export function formatToolArgs(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === "bash" && args.command) {
+    return String(args.command).slice(0, 120);
+  }
+  if (toolName === "read" && args.path) {
+    return String(args.path);
+  }
+  if (toolName === "write" && args.path) {
+    return String(args.path);
+  }
+  if (toolName === "edit" && args.path) {
+    return String(args.path);
+  }
+  return JSON.stringify(args).slice(0, 120);
+}
+
 /** Extract text from tool result content blocks */
 export function extractToolText(content: unknown): string {
   if (!Array.isArray(content)) return String(content ?? "");
@@ -293,11 +310,13 @@ function parseHistoryMessages(raw: unknown[]): CompletedMessage[] {
             thinking += block.thinking as string;
           } else if (block.type === "toolCall") {
             const toolId = block.id as string;
+            const toolName = block.name as string;
+            const argsObj = (block.arguments ?? {}) as Record<string, unknown>;
             const result = toolResults.get(toolId);
             tools.push({
               id: toolId,
-              name: block.name as string,
-              args: JSON.stringify(block.arguments ?? {}).slice(0, 120),
+              name: toolName,
+              args: formatToolArgs(toolName, argsObj),
               result: result?.content,
               isError: result?.isError,
               done: true,

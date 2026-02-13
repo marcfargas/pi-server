@@ -17,6 +17,7 @@ import {
   appReducer,
   initialState,
   extractToolText,
+  formatToolArgs,
   type AppState,
   type CompletedMessage,
   type ToolExecution,
@@ -463,17 +464,8 @@ function handlePiEvent(
     case "tool_execution_start": {
       const toolCallId = (payload.toolCallId as string) ?? `tool-${Date.now()}`;
       const name = (payload.toolName as string) ?? "unknown";
-      // For bash, show the command; for others, show truncated args
-      let args = "";
-      if (payload.args) {
-        const argsObj = payload.args as Record<string, unknown>;
-        if (name === "bash" && argsObj.command) {
-          args = String(argsObj.command).slice(0, 120);
-        } else {
-          args = JSON.stringify(argsObj).slice(0, 120);
-        }
-      }
-      dispatch({ type: "TOOL_START", id: toolCallId, name, args });
+      const argsObj = (payload.args as Record<string, unknown>) ?? {};
+      dispatch({ type: "TOOL_START", id: toolCallId, name, args: formatToolArgs(name, argsObj) });
       break;
     }
 
