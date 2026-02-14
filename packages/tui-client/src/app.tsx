@@ -14,6 +14,7 @@ import { Box, Text, Static, useApp, useStdout, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { Connection, type ConnectionState } from "./connection.js";
 import { Editor } from "./editor.js";
+import { routeInput, extractCommandNames, type PiCommand } from "@marcfargas/pi-server-commands";
 import {
   appReducer,
   initialState,
@@ -54,6 +55,9 @@ export default function App({ url }: AppProps) {
 
   const columns = stdout?.columns ?? 80;
 
+  // Discovered commands from pi (extensions, skills, templates) — for routing
+  const [discoveredCommands, setDiscoveredCommands] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     const conn = new Connection(url, {
       onStateChange: (connState: ConnectionState) => {
@@ -71,9 +75,21 @@ export default function App({ url }: AppProps) {
           model: modelName,
         });
         dispatch({ type: "LOAD_HISTORY", messages: welcome.messages });
+
+        // Discover available commands from pi for routing
+        conn.sendCommand({ type: "get_commands", id: "__discover_commands" });
       },
 
       onEvent: (payload) => {
+        // Intercept get_commands response for command discovery
+        const p = payload as Record<string, unknown>;
+        if (p.type === "response" && p.command === "get_commands" && p.id === "__discover_commands" && p.success) {
+          const data = p.data as Record<string, unknown>;
+          if (data && Array.isArray(data.commands)) {
+            setDiscoveredCommands(extractCommandNames(data.commands as PiCommand[]));
+          }
+          return; // Don't dispatch to UI — internal housekeeping
+        }
         handlePiEvent(payload, dispatch);
       },
 
@@ -138,17 +154,26 @@ export default function App({ url }: AppProps) {
         return;
       }
 
-      // --- Everything else goes to pi as prompt ---
-      // Pi handles routing: /commands, /skill:name, /templates, extensions, plain text.
+      // --- Route through shared command library ---
+      const route = routeInput(trimmed, discoveredCommands);
+
+      if (route.kind === "builtin") {
+        // Builtin command → send as typed RPC command
+        connection?.sendCommand(route.rpc);
+        return;
+      }
+
+      // Text or prompt (extension/skill/unknown slash command)
+      const message = route.message;
       if (state.isAgentBusy) {
-        dispatch({ type: "USER_MESSAGE", content: `[steer] ${trimmed}` });
-        connection?.sendCommand({ type: "prompt", message: trimmed, streamingBehavior: "steer" });
+        dispatch({ type: "USER_MESSAGE", content: `[steer] ${message}` });
+        connection?.sendCommand({ type: "prompt", message, streamingBehavior: "steer" });
       } else {
-        dispatch({ type: "USER_MESSAGE", content: trimmed });
-        connection?.sendCommand({ type: "prompt", message: trimmed });
+        dispatch({ type: "USER_MESSAGE", content: message });
+        connection?.sendCommand({ type: "prompt", message });
       }
     },
-    [connection, exit, state.isAgentBusy, state.serverInfo, state.connectionState],
+    [connection, exit, state.isAgentBusy, state.serverInfo, state.connectionState, discoveredCommands],
   );
 
   const handleExtensionUIResponse = useCallback(

@@ -50,6 +50,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@marcfargas/pi-server-commands": "0.2.0",
     "@marcfargas/pi-server-protocol": "0.2.0",
     "ink": "^5.1.0",
     "ink-text-input": "^6.0.0",

@@ -5,6 +5,7 @@
   "private": true,
   "workspaces": [
     "packages/protocol",
+    "packages/commands",
     "packages/server",
     "packages/tui-client"
   ],

@@ -1,0 +1,45 @@
+{
+  "name": "@marcfargas/pi-server-commands",
+  "version": "0.2.0",
+  "description": "Command catalog, routing, and completion for pi-server clients — shared library",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "pi",
+    "agent",
+    "commands",
+    "completion",
+    "rpc"
+  ],
+  "license": "MIT",
+  "author": "Marc Fargas",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marcfargas/pi-server",
+    "directory": "packages/commands"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.1"
+  }
+}

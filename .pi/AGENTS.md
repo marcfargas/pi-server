@@ -20,13 +20,13 @@ English — all code, docs, and commits.
 3. **Version the protocol** — bump `PROTOCOL_VERSION` on breaking changes
 4. **Relay, don't interpret** — server passes pi's JSON messages through unchanged
 5. **Extension UI bridging** — fire-and-forget → broadcast; dialogs → route to rw client with timeout
-6. **Assume nothing about pi — discover dynamically**
-   - Do NOT hardcode slash commands, RPC command names, or capability lists
-   - Use `get_commands` to discover available commands at runtime
-   - Send user input through `prompt` and let pi handle routing (extension commands, skills, templates, built-in commands)
-   - The client is a thin relay — pi decides what `/model`, `/compact`, `/whatever` means
-   - If pi's RPC doesn't handle something, that's a pi limitation to fix upstream, not a client workaround to maintain
-   - This applies to event types too: forward unknown events gracefully, don't crash on new ones
+6. **Assume nothing about pi — discover dynamically where possible**
+   - Use `get_commands` to discover extension/skill/template commands at runtime
+   - The server is a pure relay — it does NOT interpret, route, or transform commands
+   - Builtin command knowledge (the mapping from `/model` → `cycle_model` RPC) lives in `packages/commands`, a shared client library — NOT in the server
+   - Each client imports this library and decides how to use it (completion UI, routing, etc.)
+   - Forward unknown events gracefully, don't crash on new ones
+   - Long-term: contribute upstream to pi so `get_commands` returns builtins too
 
 ## Conventions
 
