@@ -52,6 +52,59 @@ class MockPiTransport implements IPiTransport {
       return;
     }
 
+    // Handle get_commands
+    if (type === "get_commands") {
+      this.emit({
+        type: "response",
+        id: message.id,
+        command: "get_commands",
+        success: true,
+        data: {
+          commands: [
+            { name: "todos", description: "List todos", source: "extension" },
+            { name: "plan", description: "Toggle plan mode", source: "extension" },
+            { name: "skill:web-search", description: "Web search", source: "skill" },
+          ],
+        },
+      });
+      return;
+    }
+
+    // Handle cycle_model
+    if (type === "cycle_model") {
+      this.emit({
+        type: "response",
+        id: message.id,
+        command: "cycle_model",
+        success: true,
+        data: { model: { id: "next-model", name: "Next Model", provider: "test" }, thinkingLevel: "off" },
+      });
+      return;
+    }
+
+    // Handle set_thinking_level
+    if (type === "set_thinking_level") {
+      this.emit({
+        type: "response",
+        id: message.id,
+        command: "set_thinking_level",
+        success: true,
+      });
+      return;
+    }
+
+    // Handle get_session_stats
+    if (type === "get_session_stats") {
+      this.emit({
+        type: "response",
+        id: message.id,
+        command: "get_session_stats",
+        success: true,
+        data: { totalMessages: 0, tokens: { total: 0 }, cost: 0 },
+      });
+      return;
+    }
+
     // Handle prompt — emit the scripted events
     if (type === "prompt") {
       // Fire events async (simulates streaming)
@@ -347,5 +400,121 @@ describe("WebSocket relay", () => {
     ws2.close();
   });
 
+  it("commands library routes /model to cycle_model via relay", async () => {
+    // Import the commands library
+    const { routeInput, extractCommandNames } = await import("@marcfargas/pi-server-commands");
 
+    const transport = new MockPiTransport();
+    server = new WsServer({ port: PORT, piProcess: transport });
+    await server.start();
+
+    const { ws } = await connectAndHandshake(PORT);
+
+    // Step 1: discover commands (what TUI does on connect)
+    ws.send(JSON.stringify({
+      type: "command",
+      payload: { type: "get_commands", id: "disc" },
+    }));
+
+    // Wait for get_commands response
+    const discResponse = await new Promise<Record<string, unknown>>((resolve) => {
+      const handler = (data: WebSocket.RawData) => {
+        const m = JSON.parse(data.toString());
+        if (m.type === "event" && m.payload?.id === "disc") {
+          ws.removeListener("message", handler);
+          resolve(m.payload);
+        }
+      };
+      ws.on("message", handler);
+    });
+
+    expect(discResponse.success).toBe(true);
+    const discovered = extractCommandNames(
+      ((discResponse.data as Record<string, unknown>).commands as Array<{ name: string }>),
+    );
+    expect(discovered.has("todos")).toBe(true);
+
+    // Step 2: route /model through commands library
+    const route = routeInput("/model", discovered);
+    expect(route.kind).toBe("builtin");
+    expect((route as { rpc: Record<string, unknown> }).rpc.type).toBe("cycle_model");
+
+    // Step 3: send the routed command
+    transport.sent.length = 0;
+    ws.send(JSON.stringify({ type: "command", payload: (route as { rpc: Record<string, unknown> }).rpc }));
+
+    // Wait for response
+    const modelResponse = await new Promise<Record<string, unknown>>((resolve) => {
+      const handler = (data: WebSocket.RawData) => {
+        const m = JSON.parse(data.toString());
+        if (m.type === "event" && m.payload?.command === "cycle_model") {
+          ws.removeListener("message", handler);
+          resolve(m.payload);
+        }
+      };
+      ws.on("message", handler);
+    });
+
+    expect(modelResponse.success).toBe(true);
+    expect((modelResponse.data as Record<string, unknown>).model).toBeDefined();
+
+    // Verify the transport received cycle_model, NOT prompt
+    const sentToTransport = transport.sent.find((m) => m.type === "cycle_model");
+    expect(sentToTransport).toBeDefined();
+    expect(transport.sent.find((m) => m.type === "prompt")).toBeUndefined();
+
+    ws.close();
+  });
+
+  it("commands library routes /todos as prompt via relay", async () => {
+    const { routeInput, extractCommandNames } = await import("@marcfargas/pi-server-commands");
+
+    const transport = new MockPiTransport();
+    transport.scriptPrompt([{ type: "agent_start" }, { type: "agent_end" }]);
+    server = new WsServer({ port: PORT, piProcess: transport });
+    await server.start();
+
+    const { ws } = await connectAndHandshake(PORT);
+
+    // Discover commands
+    ws.send(JSON.stringify({
+      type: "command",
+      payload: { type: "get_commands", id: "disc2" },
+    }));
+
+    const discResponse = await new Promise<Record<string, unknown>>((resolve) => {
+      const handler = (data: WebSocket.RawData) => {
+        const m = JSON.parse(data.toString());
+        if (m.type === "event" && m.payload?.id === "disc2") {
+          ws.removeListener("message", handler);
+          resolve(m.payload);
+        }
+      };
+      ws.on("message", handler);
+    });
+
+    const discovered = extractCommandNames(
+      ((discResponse.data as Record<string, unknown>).commands as Array<{ name: string }>),
+    );
+
+    // Route /todos — should be prompt (extension)
+    const route = routeInput("/todos", discovered);
+    expect(route.kind).toBe("prompt");
+
+    // Send it
+    transport.sent.length = 0;
+    ws.send(JSON.stringify({
+      type: "command",
+      payload: { type: "prompt", message: (route as { message: string }).message },
+    }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Verify prompt was sent, NOT a typed command
+    const promptMsg = transport.sent.find((m) => m.type === "prompt");
+    expect(promptMsg).toBeDefined();
+    expect(promptMsg!.message).toBe("/todos");
+
+    ws.close();
+  });
 });
