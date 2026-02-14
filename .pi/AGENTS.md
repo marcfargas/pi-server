@@ -35,6 +35,24 @@ English — all code, docs, and commits.
 - Tests with vitest
 - Conventional commits
 
+## Testing — Non-Negotiable
+
+**E2E testing is the baseline, not an afterthought.**
+
+Every feature must be validated end-to-end before committing:
+1. Write the code
+2. Write unit tests for pure logic (reducer, router, parsing)
+3. Write relay integration tests using MockPiTransport (no LLM, fast, CI-safe)
+4. **Run a real E2E probe** against a live server — verify the actual wire protocol behavior
+5. Only then commit
+
+Use the `manual-test` skill for probe patterns. The relay tests in `packages/server/test/relay.test.ts` are the model: they test the full path (client → WebSocket → server → MockPiTransport → response → client assertions).
+
+Do NOT:
+- Commit code validated only by `tsc` and unit tests
+- Assume protocol behavior from docs without verifying
+- Skip E2E when "the unit tests pass"
+
 ## Skills
 
 ### `manual-test`
