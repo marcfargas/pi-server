@@ -20,14 +20,22 @@ Pi is a powerful coding agent, but it's tied to your terminal. Close the tab, lo
 - **Remote** — run pi on a beefy server, connect from your laptop
 - **Multiplexable** — foundation for web dashboards, mobile clients, multi-agent orchestration
 
+## Install
+
+```bash
+npm install -g @marcfargas/pi-server @marcfargas/pi-client
+```
+
+> **Note:** `npx` does not reliably pass `--` to the underlying command (especially with pnpm). Use a global install instead.
+
 ## Quick Start
 
 ```bash
 # Terminal 1 — start the server (localhost only, no auth needed)
-npx pi-server serve -- --provider google --model gemini-2.5-flash
+pi-server serve -- --provider google --model gemini-2.5-flash
 
 # Terminal 2 — connect
-npx pi-client connect ws://localhost:3333
+pi-client connect ws://localhost:3333
 ```
 
 Type a message, see streaming responses. Close the client, reopen it — your conversation is still there.
@@ -36,10 +44,10 @@ Type a message, see streaming responses. Close the client, reopen it — your co
 
 ```bash
 # Server — expose on network with token auth
-npx pi-server serve --host 0.0.0.0 --token mysecret -- --provider anthropic --model claude-sonnet-4-5
+pi-server serve --host 0.0.0.0 --token mysecret -- --provider anthropic --model claude-sonnet-4-5
 
 # Client — provide matching token
-npx pi-client connect ws://server:3333 --token mysecret
+pi-client connect ws://server:3333 --token mysecret
 ```
 
 ## Packages
