@@ -66,6 +66,9 @@ export interface AppState {
 
   /** Error message to display (transient) */
   errorMessage: string | null;
+
+  /** Next message ID counter (kept in reducer state to avoid module-level leaks) */
+  nextMessageId: number;
 }
 
 export const initialState: AppState = {
@@ -78,6 +81,7 @@ export const initialState: AppState = {
   isAgentBusy: false,
   extensionUI: null,
   errorMessage: null,
+  nextMessageId: 1,
 };
 
 // =============================================================================
@@ -105,8 +109,6 @@ export type AppAction =
 // Reducer
 // =============================================================================
 
-let messageCounter = 0;
-
 export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case "SET_CONNECTION_STATE":
@@ -123,8 +125,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       };
 
     case "LOAD_HISTORY": {
-      const messages = parseHistoryMessages(action.messages);
-      return { ...state, completedMessages: messages };
+      const { messages, nextMessageId } = parseHistoryMessages(action.messages, state.nextMessageId);
+      return { ...state, completedMessages: messages, nextMessageId };
     }
 
     case "USER_MESSAGE":
@@ -133,11 +135,12 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         completedMessages: [
           ...state.completedMessages,
           {
-            id: `msg-${++messageCounter}`,
+            id: `msg-${state.nextMessageId}`,
             role: "user",
             content: action.content,
           },
         ],
+        nextMessageId: state.nextMessageId + 1,
       };
 
     case "AGENT_START":
@@ -151,14 +154,16 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case "AGENT_END": {
       const completed: CompletedMessage[] = [...state.completedMessages];
+      let nextMessageId = state.nextMessageId;
       if (state.streamingText || state.streamingThinking || state.streamingTools.length > 0) {
         completed.push({
-          id: `msg-${++messageCounter}`,
+          id: `msg-${nextMessageId}`,
           role: "assistant",
           content: state.streamingText,
           thinking: state.streamingThinking || undefined,
           tools: state.streamingTools.length > 0 ? state.streamingTools : undefined,
         });
+        nextMessageId += 1;
       }
       return {
         ...state,
@@ -167,6 +172,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         streamingThinking: "",
         streamingTools: [],
         completedMessages: completed,
+        nextMessageId,
       };
     }
 
@@ -257,85 +263,96 @@ export function extractToolText(content: unknown): string {
 /**
  * Parse pi's message history into our display format.
  */
-function parseHistoryMessages(raw: unknown[]): CompletedMessage[] {
-  const messages: CompletedMessage[] = [];
-  // Collect tool results from user messages to attach to previous assistant
-  const toolResults = new Map<string, { content: string; isError: boolean }>();
+function parseHistoryMessages(
+  raw: unknown[],
+  startId: number,
+): { messages: CompletedMessage[]; nextMessageId: number } {
+  try {
+    const messages: CompletedMessage[] = [];
+    let nextMessageId = startId;
+    // Collect tool results from user messages to attach to previous assistant
+    const toolResults = new Map<string, { content: string; isError: boolean }>();
 
-  // First pass: collect tool results
-  for (const msg of raw) {
-    const m = msg as Record<string, unknown>;
-    if (m.role === "toolResult") {
-      const content = extractToolText(m.content);
-      toolResults.set(m.toolCallId as string, {
-        content,
-        isError: m.isError as boolean,
-      });
-    }
-  }
-
-  // Second pass: build messages
-  for (const msg of raw) {
-    const m = msg as Record<string, unknown>;
-    const role = m.role as string;
-
-    if (role === "user") {
-      let content = "";
-      if (typeof m.content === "string") {
-        content = m.content;
-      } else if (Array.isArray(m.content)) {
-        for (const block of m.content as Array<Record<string, unknown>>) {
-          if (block.type === "text") content += block.text as string;
-        }
-      }
-      if (content) {
-        messages.push({
-          id: `hist-${++messageCounter}`,
-          role: "user",
+    // First pass: collect tool results
+    for (const msg of raw) {
+      const m = msg as Record<string, unknown>;
+      if (m.role === "toolResult") {
+        const content = extractToolText(m.content);
+        toolResults.set(m.toolCallId as string, {
           content,
+          isError: m.isError as boolean,
         });
       }
     }
 
-    if (role === "assistant") {
-      let content = "";
-      let thinking = "";
-      const tools: ToolExecution[] = [];
+    // Second pass: build messages
+    for (const msg of raw) {
+      const m = msg as Record<string, unknown>;
+      const role = m.role as string;
 
-      if (Array.isArray(m.content)) {
-        for (const block of m.content as Array<Record<string, unknown>>) {
-          if (block.type === "text") {
-            content += block.text as string;
-          } else if (block.type === "thinking") {
-            thinking += block.thinking as string;
-          } else if (block.type === "toolCall") {
-            const toolId = block.id as string;
-            const toolName = block.name as string;
-            const argsObj = (block.arguments ?? {}) as Record<string, unknown>;
-            const result = toolResults.get(toolId);
-            tools.push({
-              id: toolId,
-              name: toolName,
-              args: formatToolArgs(toolName, argsObj),
-              result: result?.content,
-              isError: result?.isError,
-              done: true,
-            });
+      if (role === "user") {
+        let content = "";
+        if (typeof m.content === "string") {
+          content = m.content;
+        } else if (Array.isArray(m.content)) {
+          for (const block of m.content as Array<Record<string, unknown>>) {
+            if (block.type === "text") content += block.text as string;
           }
         }
+        if (content) {
+          messages.push({
+            id: `msg-${nextMessageId}`,
+            role: "user",
+            content,
+          });
+          nextMessageId += 1;
+        }
       }
 
-      if (content || thinking || tools.length > 0) {
-        messages.push({
-          id: `hist-${++messageCounter}`,
-          role: "assistant",
-          content,
-          thinking: thinking || undefined,
-          tools: tools.length > 0 ? tools : undefined,
-        });
+      if (role === "assistant") {
+        let content = "";
+        let thinking = "";
+        const tools: ToolExecution[] = [];
+
+        if (Array.isArray(m.content)) {
+          for (const block of m.content as Array<Record<string, unknown>>) {
+            if (block.type === "text") {
+              content += block.text as string;
+            } else if (block.type === "thinking") {
+              thinking += block.thinking as string;
+            } else if (block.type === "toolCall") {
+              const toolId = block.id as string;
+              const toolName = block.name as string;
+              const argsObj = (block.arguments ?? {}) as Record<string, unknown>;
+              const result = toolResults.get(toolId);
+              tools.push({
+                id: toolId,
+                name: toolName,
+                args: formatToolArgs(toolName, argsObj),
+                result: result?.content,
+                isError: result?.isError,
+                done: true,
+              });
+            }
+          }
+        }
+
+        if (content || thinking || tools.length > 0) {
+          messages.push({
+            id: `msg-${nextMessageId}`,
+            role: "assistant",
+            content,
+            thinking: thinking || undefined,
+            tools: tools.length > 0 ? tools : undefined,
+          });
+          nextMessageId += 1;
+        }
       }
     }
-  }
 
-  return messages;
+    return { messages, nextMessageId };
+  } catch (error) {
+    console.error("Failed to parse history messages:", error);
+    return { messages: [], nextMessageId: startId };
+  }
 }

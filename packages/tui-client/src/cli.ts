@@ -48,15 +48,17 @@ Arguments:
   url    WebSocket URL (default: ws://localhost:3333)
 
 Options:
-  --help, -h    Show this help
+  --token, -t <token>   Authentication token (must match server --token)
+  --help, -h            Show this help
 
 Commands:
-  /quit, /exit  Disconnect and exit
+  //quit, //exit   Disconnect and exit
+  //help           Show client commands
 
 Examples:
   pi-client connect
-  pi-client connect ws://localhost:3333
-  pi-client wss://remote.server.com:9090
+  pi-client connect ws://localhost:3333 --token mysecret
+  pi-client wss://remote.server.com:9090 --token mysecret
 `);
 }
 
@@ -68,9 +70,9 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const { url } = parseArgs(args);
+  const { url, token } = parseArgs(args);
 
-  const { waitUntilExit } = render(React.createElement(App, { url }));
+  const { waitUntilExit } = render(React.createElement(App, { url, token }));
   await waitUntilExit();
 }
 

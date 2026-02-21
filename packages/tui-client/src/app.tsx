@@ -9,7 +9,7 @@
  * - Text input bar
  */
 
-import React, { useReducer, useCallback, useState, useEffect } from "react";
+import React, { useReducer, useCallback, useState, useEffect, useRef } from "react";
 import { Box, Text, Static, useApp, useStdout, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { Connection, type ConnectionState } from "./connection.js";
@@ -44,14 +44,17 @@ function truncateOutput(text: string): string {
 
 interface AppProps {
   url: string;
+  token?: string;
 }
 
-export default function App({ url }: AppProps) {
+export default function App({ url, token }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [state, dispatch] = useReducer(appReducer, initialState);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [inputHistory, setInputHistory] = useState<string[]>([]);
+  const [showHelpHint, setShowHelpHint] = useState(false);
+  const helpHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const columns = stdout?.columns ?? 80;
 
@@ -76,6 +79,15 @@ export default function App({ url }: AppProps) {
         });
         dispatch({ type: "LOAD_HISTORY", messages: welcome.messages });
 
+        setShowHelpHint(true);
+        if (helpHintTimerRef.current) {
+          clearTimeout(helpHintTimerRef.current);
+        }
+        helpHintTimerRef.current = setTimeout(() => {
+          setShowHelpHint(false);
+          helpHintTimerRef.current = null;
+        }, 5_000);
+
         // Discover available commands from pi for routing
         conn.sendCommand({ type: "get_commands", id: "__discover_commands" });
       },
@@ -90,6 +102,13 @@ export default function App({ url }: AppProps) {
           }
           return; // Don't dispatch to UI — internal housekeeping
         }
+
+        if (p.type === "error" && p.code === "PI_PROCESS_ERROR") {
+          dispatch({ type: "SET_ERROR", message: "Pi agent process crashed — server needs restart" });
+          conn.disconnect();
+          return;
+        }
+
         handlePiEvent(payload, dispatch);
       },
 
@@ -98,17 +117,35 @@ export default function App({ url }: AppProps) {
       },
 
       onError: (error) => {
+        if (error.code === "UNAUTHORIZED") {
+          dispatch({ type: "SET_ERROR", message: "Authentication failed. Check your --token." });
+          conn.disconnect();
+          return;
+        }
+
+        if (error.code === "PI_PROCESS_ERROR") {
+          dispatch({ type: "SET_ERROR", message: "Pi agent process crashed — server needs restart" });
+          conn.disconnect();
+          return;
+        }
+
         dispatch({
           type: "SET_ERROR",
           message: `[${error.code}] ${error.message}`,
         });
       },
-    });
+    }, { token });
 
     conn.connect();
     setConnection(conn);
-    return () => conn.disconnect();
-  }, [url]);
+    return () => {
+      if (helpHintTimerRef.current) {
+        clearTimeout(helpHintTimerRef.current);
+        helpHintTimerRef.current = null;
+      }
+      conn.disconnect();
+    };
+  }, [url, token]);
 
   const handleSubmit = useCallback(
     (text: string) => {
@@ -197,6 +234,12 @@ export default function App({ url }: AppProps) {
       <Box flexDirection="column">
         <StatusBar state={state} />
 
+        {showHelpHint && (
+          <Box marginLeft={1}>
+            <Text dimColor>Type //help for commands</Text>
+          </Box>
+        )}
+
         {state.errorMessage && (
           <Box marginLeft={1}>
             <Text color="red">⚠ {state.errorMessage}</Text>
@@ -213,6 +256,7 @@ export default function App({ url }: AppProps) {
 
         {state.extensionUI && (
           <ExtensionUIDialog
+            key={state.extensionUI.id}
             request={state.extensionUI}
             onRespond={handleExtensionUIResponse}
           />
@@ -442,20 +486,48 @@ function ExtensionUISelect({
   onSelect: (index: number) => void;
   onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void;
 }) {
+  useEffect(() => {
+    if (options.length > 0) return;
+    const timer = setTimeout(() => onRespond({ cancelled: true }), 2_000);
+    return () => clearTimeout(timer);
+  }, [options.length, onRespond]);
+
+  const safeIndex = options.length > 0
+    ? Math.max(0, Math.min(selectedIndex, options.length - 1))
+    : 0;
+
   useInput((_input, key) => {
-    if (key.upArrow) onSelect(Math.max(0, selectedIndex - 1));
-    else if (key.downArrow) onSelect(Math.min(options.length - 1, selectedIndex + 1));
-    else if (key.return) onRespond({ value: options[selectedIndex]!.value });
-    else if (key.escape) onRespond({ cancelled: true });
+    if (key.escape) {
+      onRespond({ cancelled: true });
+      return;
+    }
+
+    if (options.length === 0) {
+      return;
+    }
+
+    if (key.upArrow) onSelect(Math.max(0, safeIndex - 1));
+    else if (key.downArrow) onSelect(Math.min(options.length - 1, safeIndex + 1));
+    else if (key.return) onRespond({ value: options[safeIndex]!.value });
   });
+
+  if (options.length === 0) {
+    return (
+      <Box flexDirection="column" borderStyle="round" borderColor="red" paddingX={1}>
+        <Text bold color="red">{request.title ?? "Select"}</Text>
+        <Text color="red">Error: no options provided by extension.</Text>
+        <Text dimColor>Cancelling in 2s…</Text>
+      </Box>
+    );
+  }
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
       <Text bold color="cyan">{request.title ?? "Select"}</Text>
       {request.message && <Text>{request.message}</Text>}
       {options.map((opt, i) => (
-        <Text key={opt.value} color={i === selectedIndex ? "cyan" : undefined}>
-          {i === selectedIndex ? "❯" : " "} {opt.label}
+        <Text key={opt.value} color={i === safeIndex ? "cyan" : undefined}>
+          {i === safeIndex ? "❯" : " "} {opt.label}
         </Text>
       ))}
       <Text dimColor>↑↓ to navigate · Enter to select · Esc to cancel</Text>
