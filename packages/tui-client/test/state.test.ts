@@ -296,3 +296,157 @@ describe("agent lifecycle", () => {
     expect(state.completedMessages[0]!.role).toBe("user");
   });
 });
+
+// =============================================================================
+// Edge cases (added for v1.0 coverage)
+// =============================================================================
+
+describe("LOAD_HISTORY edge cases", () => {
+  it("handles empty array without crashing", () => {
+    const state = reduce(initialState, { type: "LOAD_HISTORY", messages: [] });
+    expect(state.completedMessages).toHaveLength(0);
+  });
+
+  it("skips messages with missing role without crashing", () => {
+    const state = reduce(initialState, {
+      type: "LOAD_HISTORY",
+      messages: [
+        { no_role: "user", content: "oops" },
+        { role: "user", content: "valid" },
+      ],
+    });
+    // Only the valid user message should appear
+    expect(state.completedMessages).toHaveLength(1);
+    expect(state.completedMessages[0]!.content).toBe("valid");
+  });
+
+  it("skips user messages with no extractable content", () => {
+    const state = reduce(initialState, {
+      type: "LOAD_HISTORY",
+      messages: [
+        { role: "user", content: "" },
+        { role: "user", content: null },
+      ],
+    });
+    expect(state.completedMessages).toHaveLength(0);
+  });
+
+  it("skips assistant messages with no content, no thinking, no tools", () => {
+    const state = reduce(initialState, {
+      type: "LOAD_HISTORY",
+      messages: [
+        { role: "assistant", content: [] },
+      ],
+    });
+    expect(state.completedMessages).toHaveLength(0);
+  });
+
+  it("handles toolResult for unknown toolCallId gracefully", () => {
+    // toolResult referencing a non-existent toolCall should not crash
+    const state = reduce(initialState, {
+      type: "LOAD_HISTORY",
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "nonexistent-id",
+          content: [{ type: "text", text: "result text" }],
+          isError: false,
+        },
+        { role: "user", content: "hello" },
+      ],
+    });
+    // The user message should still parse fine
+    expect(state.completedMessages).toHaveLength(1);
+    expect(state.completedMessages[0]!.content).toBe("hello");
+  });
+});
+
+describe("TOOL_UPDATE edge cases", () => {
+  it("TOOL_UPDATE for non-existent tool ID leaves state unchanged", () => {
+    const state = reduce(
+      agentStarted,
+      { type: "TOOL_START", id: "tc-1", name: "bash", args: "ls" },
+      { type: "TOOL_UPDATE", id: "nonexistent-id", output: "should not appear" },
+    );
+    // tc-1 should have no output
+    expect(state.streamingTools[0]!.output).toBeUndefined();
+    // No extra tools were added
+    expect(state.streamingTools).toHaveLength(1);
+  });
+
+  it("TOOL_UPDATE with no matching tool does not crash", () => {
+    const state = reduce(agentStarted, {
+      type: "TOOL_UPDATE",
+      id: "ghost-tool",
+      output: "ghost output",
+    });
+    expect(state.streamingTools).toHaveLength(0);
+  });
+});
+
+describe("TOOL_END edge cases", () => {
+  it("TOOL_END for non-existent tool ID leaves state unchanged", () => {
+    const state = reduce(
+      agentStarted,
+      { type: "TOOL_START", id: "tc-1", name: "bash", args: "ls" },
+      { type: "TOOL_END", id: "nonexistent-id", result: "ghost result", isError: false },
+    );
+    // tc-1 should remain undone
+    expect(state.streamingTools[0]!.done).toBeUndefined();
+    expect(state.streamingTools).toHaveLength(1);
+  });
+
+  it("TOOL_END with no matching tool does not crash", () => {
+    const state = reduce(agentStarted, {
+      type: "TOOL_END",
+      id: "ghost-tool",
+      result: "ghost",
+      isError: false,
+    });
+    expect(state.streamingTools).toHaveLength(0);
+  });
+});
+
+describe("EXTENSION_UI_REQUEST and EXTENSION_UI_DISMISS", () => {
+  it("EXTENSION_UI_REQUEST sets extensionUI", () => {
+    const request = {
+      id: "req-1",
+      method: "confirm" as const,
+      title: "Are you sure?",
+      message: "This cannot be undone.",
+    };
+    const state = reduce(initialState, { type: "EXTENSION_UI_REQUEST", request });
+    expect(state.extensionUI).toEqual(request);
+  });
+
+  it("EXTENSION_UI_DISMISS clears extensionUI to null", () => {
+    const request = {
+      id: "req-1",
+      method: "input" as const,
+      title: "Enter value",
+    };
+    const state = reduce(
+      initialState,
+      { type: "EXTENSION_UI_REQUEST", request },
+      { type: "EXTENSION_UI_DISMISS" },
+    );
+    expect(state.extensionUI).toBeNull();
+  });
+
+  it("EXTENSION_UI_DISMISS on already-null extensionUI does not crash", () => {
+    const state = reduce(initialState, { type: "EXTENSION_UI_DISMISS" });
+    expect(state.extensionUI).toBeNull();
+  });
+
+  it("second EXTENSION_UI_REQUEST replaces the first", () => {
+    const req1 = { id: "req-1", method: "confirm" as const };
+    const req2 = { id: "req-2", method: "input" as const, title: "Name?" };
+    const state = reduce(
+      initialState,
+      { type: "EXTENSION_UI_REQUEST", request: req1 },
+      { type: "EXTENSION_UI_REQUEST", request: req2 },
+    );
+    expect(state.extensionUI?.id).toBe("req-2");
+    expect(state.extensionUI?.method).toBe("input");
+  });
+});
