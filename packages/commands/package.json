@@ -38,6 +38,9 @@
   "publishConfig": {
     "access": "public"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "devDependencies": {
     "typescript": "^5.7.0",
     "vitest": "^3.2.1"
