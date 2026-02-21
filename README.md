@@ -26,7 +26,7 @@ Pi is a powerful coding agent, but it's tied to your terminal. Close the tab, lo
 npm install -g @marcfargas/pi-server @marcfargas/pi-client
 ```
 
-> **Note:** `npx` does not reliably pass `--` to the underlying command (especially with pnpm). Use a global install instead.
+> **Note:** `npx` and PowerShell `.ps1` shims do not reliably pass `--` to the underlying command. Use a global install and invoke from **cmd** or **Git Bash**, not PowerShell, when passing pi options via `--`.
 
 ## Quick Start
 
