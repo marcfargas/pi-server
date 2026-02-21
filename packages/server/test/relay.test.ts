@@ -206,7 +206,9 @@ describe("WebSocket relay", () => {
 
     expect(welcome.type).toBe("welcome");
     expect(welcome.protocolVersion).toBe(PROTOCOL_VERSION);
-    expect(welcome.serverId).toBe("pi-server-1");
+    // serverId is a per-process UUID (ephemeral, not persisted)
+    expect(typeof welcome.serverId).toBe("string");
+    expect(welcome.serverId).toBeTruthy();
     expect((welcome.sessionState as Record<string, unknown>)?.model).toEqual({
       name: "test-model",
       id: "test/model",
@@ -516,5 +518,257 @@ describe("WebSocket relay", () => {
     expect(promptMsg!.message).toBe("/todos");
 
     ws.close();
+  });
+});
+
+// =============================================================================
+// Hardening tests (auth, concurrent connections, pi exit)
+// =============================================================================
+
+// Extended mock that supports triggering an exit callback (for A-3 tests)
+class MockPiTransportWithExit extends MockPiTransport {
+  private exitHandler: ((code: number | null, signal: string | null) => void) | null = null;
+
+  onExit(handler: (code: number | null, signal: string | null) => void): void {
+    this.exitHandler = handler;
+  }
+
+  simulateExit(code: number | null = 1, signal: string | null = null): void {
+    this.exitHandler?.(code, signal);
+  }
+}
+
+function connectRaw(port: number): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://localhost:${port}`);
+    ws.on("open", () => resolve(ws));
+    ws.on("error", reject);
+  });
+}
+
+function nextMessage(ws: WebSocket): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const handler = (data: WebSocket.RawData) => {
+      ws.removeListener("message", handler);
+      resolve(JSON.parse(data.toString()) as Record<string, unknown>);
+    };
+    ws.on("message", handler);
+    setTimeout(() => reject(new Error("nextMessage timeout")), 3000);
+  });
+}
+
+const PORT2 = 19877;
+
+describe("Server hardening", () => {
+  afterEach(async () => {
+    if (server) {
+      await server.stop();
+      server = null;
+    }
+  });
+
+  // ── A-1: Token authentication ──────────────────────────────────────────────
+
+  it("rejects connection with wrong token (UNAUTHORIZED)", async () => {
+    const transport = new MockPiTransport();
+    server = new WsServer({ port: PORT2, piProcess: transport, token: "correct-secret" });
+    await server.start();
+
+    const ws = await connectRaw(PORT2);
+    ws.send(JSON.stringify({
+      type: "hello",
+      protocolVersion: PROTOCOL_VERSION,
+      clientId: "bad-client",
+      token: "wrong-secret",
+    }));
+
+    const msg = await nextMessage(ws);
+    expect(msg.type).toBe("error");
+    expect(msg.code).toBe("UNAUTHORIZED");
+
+    ws.close();
+  });
+
+  it("accepts connection with correct token", async () => {
+    const transport = new MockPiTransport();
+    server = new WsServer({ port: PORT2, piProcess: transport, token: "my-token" });
+    await server.start();
+
+    const ws = await connectRaw(PORT2);
+    ws.send(JSON.stringify({
+      type: "hello",
+      protocolVersion: PROTOCOL_VERSION,
+      clientId: "good-client",
+      token: "my-token",
+    }));
+
+    const msg = await nextMessage(ws);
+    expect(msg.type).toBe("welcome");
+
+    ws.close();
+  });
+
+  it("rejects connection with missing token when token is required", async () => {
+    const transport = new MockPiTransport();
+    server = new WsServer({ port: PORT2, piProcess: transport, token: "secret" });
+    await server.start();
+
+    const ws = await connectRaw(PORT2);
+    ws.send(JSON.stringify({
+      type: "hello",
+      protocolVersion: PROTOCOL_VERSION,
+      clientId: "no-token-client",
+      // token omitted
+    }));
+
+    const msg = await nextMessage(ws);
+    expect(msg.type).toBe("error");
+    expect(msg.code).toBe("UNAUTHORIZED");
+
+    ws.close();
+  });
+
+  it("allows connection without token when no token is configured", async () => {
+    const transport = new MockPiTransport();
+    // No token configured → localhost-only mode, no auth
+    server = new WsServer({ port: PORT2, piProcess: transport });
+    await server.start();
+
+    const { ws, welcome } = await connectAndHandshake(PORT2);
+    expect(welcome.type).toBe("welcome");
+
+    ws.close();
+  });
+
+  // ── A-6: Single-client handshake race ─────────────────────────────────────
+
+  it("rejects second connection while first is active", async () => {
+    const transport = new MockPiTransport();
+    server = new WsServer({ port: PORT2, piProcess: transport });
+    await server.start();
+
+    // First client connects and completes handshake
+    const { ws: ws1 } = await connectAndHandshake(PORT2);
+
+    // Second client — set up message + close listeners BEFORE connecting
+    // to avoid the race where the server closes before our listener is registered.
+    const secondResult = await new Promise<{ closed: boolean; errorMsg: Record<string, unknown> | null }>(
+      (resolve) => {
+        let errorMsg: Record<string, unknown> | null = null;
+        const ws2 = new WebSocket(`ws://localhost:${PORT2}`);
+
+        ws2.on("message", (data) => {
+          errorMsg = JSON.parse(data.toString()) as Record<string, unknown>;
+        });
+        ws2.on("close", () => resolve({ closed: true, errorMsg }));
+        ws2.on("error", () => resolve({ closed: false, errorMsg }));
+
+        ws2.on("open", () => {
+          ws2.send(JSON.stringify({
+            type: "hello",
+            protocolVersion: PROTOCOL_VERSION,
+            clientId: "second-client",
+          }));
+        });
+      },
+    );
+
+    expect(secondResult.closed).toBe(true);
+    // Server should have sent an error before closing
+    expect(secondResult.errorMsg?.type).toBe("error");
+
+    ws1.close();
+  });
+
+  it("reserves slot on TCP connect — only one of two simultaneous connections is accepted", async () => {
+    const transport = new MockPiTransport();
+    server = new WsServer({ port: PORT2, piProcess: transport });
+    await server.start();
+
+    // Open two connections simultaneously, buffering messages before 'open' fires.
+    const makeTrackedConnection = (): Promise<{
+      ws: WebSocket;
+      messages: Record<string, unknown>[];
+      closedWith: Promise<{ code: number; reason: string; messages: Record<string, unknown>[] }>;
+    }> => {
+      return new Promise((resolveOpen) => {
+        const messages: Record<string, unknown>[] = [];
+        let resolveClose!: (v: { code: number; reason: string; messages: Record<string, unknown>[] }) => void;
+        const closedWith = new Promise<{ code: number; reason: string; messages: Record<string, unknown>[] }>(
+          (r) => { resolveClose = r; },
+        );
+
+        const ws = new WebSocket(`ws://localhost:${PORT2}`);
+        ws.on("message", (data) => { messages.push(JSON.parse(data.toString()) as Record<string, unknown>); });
+        ws.on("close", (code, reason) => resolveClose({ code, reason: reason.toString(), messages }));
+        ws.on("error", () => { /* connection errors are surfaced via close */ });
+        ws.on("open", () => resolveOpen({ ws, messages, closedWith }));
+      });
+    };
+
+    const [connA, connB] = await Promise.all([
+      makeTrackedConnection(),
+      makeTrackedConnection(),
+    ]);
+
+    // The server reserves the slot for the first TCP connection.
+    // The second one is closed immediately with an error message.
+    // We don't know which is A or B — just verify one was closed immediately.
+    const raceResult = await Promise.race([
+      connA.closedWith.then((r) => ({ winner: "B" as const, rejected: r })),
+      connB.closedWith.then((r) => ({ winner: "A" as const, rejected: r })),
+    ]);
+
+    // The rejected connection should have received an error before closing
+    expect(raceResult.rejected.messages[0]?.type).toBe("error");
+    expect(raceResult.rejected.code).toBe(1008);
+
+    // Clean up the surviving connection
+    connA.ws.close();
+    connB.ws.close();
+  });
+
+  // ── A-3: Pi process death notification ────────────────────────────────────
+
+  it("sends PI_PROCESS_ERROR to client when pi exits unexpectedly", async () => {
+    const transport = new MockPiTransportWithExit();
+    server = new WsServer({ port: PORT2, piProcess: transport });
+    await server.start();
+
+    const { ws } = await connectAndHandshake(PORT2);
+
+    // Set up listener BEFORE simulating exit
+    const errorPromise = new Promise<Record<string, unknown>>((resolve) => {
+      ws.on("message", (data) => {
+        const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (msg.type === "error" && msg.code === "PI_PROCESS_ERROR") {
+          resolve(msg);
+        }
+      });
+    });
+
+    // Simulate pi crash
+    transport.simulateExit(1);
+
+    const errorMsg = await errorPromise;
+    expect(errorMsg.code).toBe("PI_PROCESS_ERROR");
+    expect(typeof errorMsg.message).toBe("string");
+
+    ws.close();
+  });
+
+  // ── A-5: WebSocketServer startup errors ───────────────────────────────────
+
+  it("rejects start() promise on port conflict (EADDRINUSE)", async () => {
+    const transport = new MockPiTransport();
+    // Start first server
+    const server1 = new WsServer({ port: PORT2, piProcess: transport });
+    await server1.start();
+
+    // Attempt to start second server on same port
+    const server2 = new WsServer({ port: PORT2, piProcess: transport });
+    await expect(server2.start()).rejects.toThrow();
+
+    await server1.stop();
   });
 });
