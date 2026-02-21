@@ -271,3 +271,83 @@ describe("server stop()", () => {
     server = null;
   });
 });
+
+// =============================================================================
+// Post-handshake message validation (Task 9)
+// =============================================================================
+
+describe("post-handshake message validation", () => {
+  it("command message without payload gets INTERNAL_ERROR, connection stays open", async () => {
+    const transport = new MockPiTransport();
+    server = new WsServer({ port: PORT, piProcess: transport });
+    await server.start();
+
+    const { ws } = await connectAndHandshake(PORT);
+
+    const msgPromise = nextMessage(ws, 2000);
+    ws.send(JSON.stringify({ type: "command" })); // missing payload
+
+    const response = await msgPromise;
+    expect(response.type).toBe("error");
+    expect(response.code).toBe("INTERNAL_ERROR");
+    expect(response.message).toContain("Invalid message format");
+
+    // Connection should still be open
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+
+  it("unknown message type gets INTERNAL_ERROR, connection stays open", async () => {
+    const transport = new MockPiTransport();
+    server = new WsServer({ port: PORT, piProcess: transport });
+    await server.start();
+
+    const { ws } = await connectAndHandshake(PORT);
+
+    const msgPromise = nextMessage(ws, 2000);
+    ws.send(JSON.stringify({ type: "nonsense", data: "whatever" }));
+
+    const response = await msgPromise;
+    expect(response.type).toBe("error");
+    expect(response.code).toBe("INTERNAL_ERROR");
+    expect(response.message).toContain("Invalid message format");
+
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+});
+
+// =============================================================================
+// CSWSH: Origin header rejection (Task 10)
+// =============================================================================
+
+describe("Origin header rejection", () => {
+  it("rejects connection with Origin header (CSWSH defense)", async () => {
+    const transport = new MockPiTransport();
+    server = new WsServer({ port: PORT, piProcess: transport });
+    await server.start();
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Origin rejection timeout")), 3000);
+      const ws = new WebSocket(`ws://localhost:${PORT}`, {
+        headers: { Origin: "http://evil.com" },
+      });
+
+      ws.on("close", (code) => {
+        clearTimeout(timer);
+        try {
+          expect(code).toBe(1008);
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+
+      ws.on("error", () => {
+        // Connection may be refused at TCP level — that's also acceptable
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  });
+});

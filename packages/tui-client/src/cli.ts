@@ -22,6 +22,10 @@ function parseArgs(args: string[]): { url: string; token?: string } {
         url = args[++i]!;
       }
     } else if (arg === "--token" || arg === "-t") {
+      if (i + 1 >= args.length) {
+        console.error(`Error: --token requires a value`);
+        process.exit(1);
+      }
       token = args[++i];
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
