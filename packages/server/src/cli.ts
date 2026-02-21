@@ -47,6 +47,10 @@ function parseArgs(args: string[]): ServeOptions {
     switch (arg) {
       case "--port":
       case "-p": {
+        if (i + 1 >= serverArgs.length) {
+          console.error(`Error: --port requires a value`);
+          process.exit(1);
+        }
         const raw = serverArgs[++i]!;
         const port = parseInt(raw, 10);
         // A-10: validate port is a number in the valid range
@@ -58,20 +62,40 @@ function parseArgs(args: string[]): ServeOptions {
         break;
       }
       case "--host": {
+        if (i + 1 >= serverArgs.length) {
+          console.error(`Error: --host requires a value`);
+          process.exit(1);
+        }
         options.host = serverArgs[++i]!;
         break;
       }
       case "--token": {
+        if (i + 1 >= serverArgs.length) {
+          console.error(`Error: --token requires a value`);
+          process.exit(1);
+        }
         options.token = serverArgs[++i]!;
         break;
       }
       case "--cwd":
+        if (i + 1 >= serverArgs.length) {
+          console.error(`Error: --cwd requires a value`);
+          process.exit(1);
+        }
         options.cwd = serverArgs[++i]!;
         break;
       case "--pi-cli-path":
+        if (i + 1 >= serverArgs.length) {
+          console.error(`Error: --pi-cli-path requires a value`);
+          process.exit(1);
+        }
         options.piCliPath = serverArgs[++i]!;
         break;
       case "--ui-timeout": {
+        if (i + 1 >= serverArgs.length) {
+          console.error(`Error: --ui-timeout requires a value`);
+          process.exit(1);
+        }
         const raw = serverArgs[++i]!;
         const ms = parseInt(raw, 10);
         // A-10: validate ui-timeout is a positive number

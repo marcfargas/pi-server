@@ -40,7 +40,7 @@ export interface WelcomeMessage {
   type: "welcome";
   /** Server's protocol version (must match client's) */
   protocolVersion: number;
-  /** Stable server identifier (persists across restarts) */
+  /** Server process identifier (ephemeral — changes on restart) */
   serverId: string;
   /** Current pi session state (from pi's `get_state` RPC command) */
   sessionState: Record<string, unknown>;
@@ -158,9 +158,7 @@ export type ErrorCode =
   | "INCOMPATIBLE_PROTOCOL"   // protocolVersion mismatch
   | "INVALID_HELLO"           // malformed hello message
   | "UNAUTHORIZED"            // invalid or missing auth token
-  | "SESSION_NOT_FOUND"       // pi process not running
   | "PI_PROCESS_ERROR"        // pi child process crashed
-  | "EXTENSION_UI_TIMEOUT"    // no response to UI request within timeout
   | "INTERNAL_ERROR";         // unexpected server error
 
 // =============================================================================

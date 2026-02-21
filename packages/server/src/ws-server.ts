@@ -19,6 +19,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   PROTOCOL_VERSION,
   isHelloMessage,
+  isClientMessage,
   createIncompatibleProtocolError,
   createError,
   type HelloMessage,
@@ -107,7 +108,7 @@ export class WsServer {
         resolve();
       });
 
-      this.wss.on("connection", (ws) => this.handleConnection(ws));
+      this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
     });
   }
 
@@ -145,7 +146,15 @@ export class WsServer {
   // WebSocket connection handling
   // ===========================================================================
 
-  private handleConnection(ws: WebSocket): void {
+  private handleConnection(ws: WebSocket, req: import("node:http").IncomingMessage): void {
+    // CSWSH defense: reject connections from browsers (Origin header present).
+    // Native WS clients (Node, native apps) never send Origin.
+    const origin = req.headers.origin;
+    if (origin) {
+      ws.close(1008, "Browser Origin rejected");
+      return;
+    }
+
     // A-6: Reserve slot immediately on TCP connect (before hello).
     // This prevents two simultaneous connections both passing the check.
     if (this.client) {
@@ -208,13 +217,12 @@ export class WsServer {
           return;
         }
 
-        // Handshake OK
-        handshakeComplete = true;
-
-        // Send welcome with full state
+        // Send welcome with full state — only mark handshake complete after
+        // the welcome is actually sent (closes the race window).
         try {
           const welcome = await this.buildWelcomeMessage();
           ws.send(JSON.stringify(welcome));
+          handshakeComplete = true;
         } catch (err) {
           const error = createError(
             "PI_PROCESS_ERROR",
@@ -232,8 +240,12 @@ export class WsServer {
         return;
       }
 
-      // Steady-state: handle client messages
-      this.handleClientMessage(parsed as ClientMessage);
+      // Steady-state: validate then handle client messages
+      if (!isClientMessage(parsed)) {
+        this.sendErrorToClient("INTERNAL_ERROR", "Invalid message format");
+        return;
+      }
+      this.handleClientMessage(parsed);
     });
 
     ws.on("pong", () => {

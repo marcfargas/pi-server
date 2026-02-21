@@ -113,7 +113,7 @@ export default function App({ url, token }: AppProps) {
       },
 
       onExtensionUI: (request) => {
-        handleExtensionUI(request, dispatch, conn);
+        handleExtensionUI(request, dispatch);
       },
 
       onError: (error) => {
@@ -432,7 +432,6 @@ function ExtensionUIDialog({
   request: ExtensionUIRequest;
   onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void;
 }) {
-  const [inputValue, setInputValue] = useState(request.defaultValue ?? "");
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   if (request.method === "select" && request.options) {
@@ -452,22 +451,7 @@ function ExtensionUIDialog({
   }
 
   if (request.method === "input" || request.method === "editor") {
-    return (
-      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
-        <Text bold color="cyan">{request.title ?? "Input"}</Text>
-        {request.message && <Text>{request.message}</Text>}
-        <Box marginTop={1}>
-          <Text color="cyan">❯ </Text>
-          <TextInput
-            value={inputValue}
-            onChange={setInputValue}
-            onSubmit={(val) => onRespond({ value: val })}
-            showCursor
-          />
-        </Box>
-        <Text dimColor>Enter to submit · Esc to cancel</Text>
-      </Box>
-    );
+    return <ExtensionUIInput request={request} onRespond={onRespond} />;
   }
 
   return (
@@ -551,6 +535,38 @@ function ExtensionUIConfirm({
       <Text bold color="cyan">{request.title ?? "Confirm"}</Text>
       {request.message && <Text>{request.message}</Text>}
       <Text dimColor>y/n to confirm · Esc to cancel</Text>
+    </Box>
+  );
+}
+
+function ExtensionUIInput({
+  request, onRespond,
+}: {
+  request: ExtensionUIRequest;
+  onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void;
+}) {
+  const [inputValue, setInputValue] = useState(request.defaultValue ?? "");
+
+  useInput((_input, key) => {
+    if (key.escape) {
+      onRespond({ cancelled: true });
+    }
+  });
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text bold color="cyan">{request.title ?? "Input"}</Text>
+      {request.message && <Text>{request.message}</Text>}
+      <Box marginTop={1}>
+        <Text color="cyan">❯ </Text>
+        <TextInput
+          value={inputValue}
+          onChange={setInputValue}
+          onSubmit={(val) => onRespond({ value: val })}
+          showCursor
+        />
+      </Box>
+      <Text dimColor>Enter to submit · Esc to cancel</Text>
     </Box>
   );
 }
@@ -654,7 +670,6 @@ function handlePiEvent(
 function handleExtensionUI(
   request: Record<string, unknown>,
   dispatch: React.Dispatch<import("./state.js").AppAction>,
-  _connection: Connection,
 ): void {
   const method = request.method as string;
   const id = request.id as string;
