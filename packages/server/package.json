@@ -21,6 +21,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "prebuild": "rm -rf dist",
     "build": "tsc",
     "clean": "rm -rf dist",
     "dev": "tsc --watch",
