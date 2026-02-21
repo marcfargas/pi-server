@@ -10,13 +10,17 @@
  * Examples:
  *   pi-server serve --port 3333 -- --provider google --model gemini-2.5-flash
  *   pi-server serve -- --provider anthropic --model claude-sonnet-4-5 --no-session
+ *   pi-server serve --host 0.0.0.0 --token mysecret -- --provider anthropic
  */
 
+import { randomUUID } from "node:crypto";
 import { PiProcess } from "./pi-process.js";
 import { WsServer } from "./ws-server.js";
 
 interface ServeOptions {
   port: number;
+  host: string;
+  token: string | undefined;
   cwd: string;
   piCliPath?: string;
   extensionUITimeoutMs?: number;
@@ -26,6 +30,8 @@ interface ServeOptions {
 function parseArgs(args: string[]): ServeOptions {
   const options: ServeOptions = {
     port: 3333,
+    host: "127.0.0.1",
+    token: undefined,
     cwd: process.cwd(),
     piArgs: [],
   };
@@ -40,22 +46,42 @@ function parseArgs(args: string[]): ServeOptions {
     const arg = serverArgs[i]!;
     switch (arg) {
       case "--port":
-      case "-p":
-        options.port = parseInt(serverArgs[++i]!, 10);
-        if (isNaN(options.port)) {
-          console.error("Invalid port number");
+      case "-p": {
+        const raw = serverArgs[++i]!;
+        const port = parseInt(raw, 10);
+        // A-10: validate port is a number in the valid range
+        if (isNaN(port) || port < 1 || port > 65535) {
+          console.error(`Error: --port must be an integer between 1 and 65535 (got: ${raw})`);
           process.exit(1);
         }
+        options.port = port;
         break;
+      }
+      case "--host": {
+        options.host = serverArgs[++i]!;
+        break;
+      }
+      case "--token": {
+        options.token = serverArgs[++i]!;
+        break;
+      }
       case "--cwd":
         options.cwd = serverArgs[++i]!;
         break;
       case "--pi-cli-path":
         options.piCliPath = serverArgs[++i]!;
         break;
-      case "--ui-timeout":
-        options.extensionUITimeoutMs = parseInt(serverArgs[++i]!, 10);
+      case "--ui-timeout": {
+        const raw = serverArgs[++i]!;
+        const ms = parseInt(raw, 10);
+        // A-10: validate ui-timeout is a positive number
+        if (isNaN(ms) || ms <= 0) {
+          console.error(`Error: --ui-timeout must be a positive integer in milliseconds (got: ${raw})`);
+          process.exit(1);
+        }
+        options.extensionUITimeoutMs = ms;
         break;
+      }
       case "--help":
       case "-h":
         printHelp();
@@ -82,6 +108,10 @@ Usage:
 
 Server options (before --):
   --port, -p <number>    WebSocket port (default: 3333)
+  --host <address>       Bind address (default: 127.0.0.1 — localhost only)
+                         Use --host 0.0.0.0 for network exposure (requires --token)
+  --token <string>       Authentication token clients must supply.
+                         Auto-generated if --host is 0.0.0.0 and --token is not set.
   --cwd <path>           Working directory for pi (default: current dir)
   --pi-cli-path <path>   Path to pi CLI entry point (default: auto-detect)
   --ui-timeout <ms>      Extension UI dialog timeout in ms (default: 60000)
@@ -91,9 +121,14 @@ Pi options (after --):
   Everything after -- is passed directly to pi. See pi --help for all options.
   Common: --provider, --model, --no-session, --no-extensions, --no-skills
 
+Security:
+  By default, pi-server binds to 127.0.0.1 (localhost only).
+  To allow network connections, use --host 0.0.0.0 (requires --token).
+
 Examples:
   pi-server serve -- --provider google --model gemini-2.5-flash
   pi-server serve --port 9090 -- --provider anthropic --model claude-sonnet-4-5
+  pi-server serve --host 0.0.0.0 --token mysecret -- --no-extensions
   pi-server serve --cwd /path/to/project -- --no-extensions --no-skills
 `);
 }
@@ -113,8 +148,25 @@ async function main(): Promise<void> {
 
   const options = parseArgs(args);
 
+  // A-1: Enforce token requirement when binding to non-localhost
+  if (options.host !== "127.0.0.1" && options.host !== "localhost") {
+    if (!options.token) {
+      // Auto-generate a token so the server is never unauthenticated on a network interface
+      options.token = randomUUID();
+      console.log(`\nSecurity notice: binding to ${options.host} requires authentication.`);
+      console.log(`Auto-generated token: ${options.token}`);
+      console.log(`Pass this to clients with: --token ${options.token}\n`);
+    }
+  }
+
   console.log(`Starting pi-server...`);
   console.log(`  Port: ${options.port}`);
+  console.log(`  Host: ${options.host}`);
+  if (options.token) {
+    console.log(`  Auth: token required`);
+  } else {
+    console.log(`  Auth: none (localhost-only mode)`);
+  }
   console.log(`  CWD:  ${options.cwd}`);
   if (options.piArgs.length > 0) console.log(`  Pi:   ${options.piArgs.join(" ")}`);
 
@@ -125,7 +177,11 @@ async function main(): Promise<void> {
     piArgs: options.piArgs.length > 0 ? options.piArgs : undefined,
   });
 
+  // A-7: track graceful shutdown to suppress spurious exit(1)
+  let isShuttingDown = false;
+
   piProcess.onExit((code, signal) => {
+    if (isShuttingDown) return; // expected exit during shutdown
     console.error(`Pi process exited (code=${code}, signal=${signal})`);
     const stderr = piProcess.getStderr();
     if (stderr) console.error(`Stderr: ${stderr}`);
@@ -143,16 +199,32 @@ async function main(): Promise<void> {
   // Start WebSocket server
   const wsServer = new WsServer({
     port: options.port,
+    host: options.host,
+    token: options.token,
     piProcess,
     extensionUITimeoutMs: options.extensionUITimeoutMs,
   });
 
-  await wsServer.start();
-  console.log(`  WebSocket listening on ws://localhost:${options.port}`);
-  console.log(`\nReady. Connect with: pi-client connect ws://localhost:${options.port}`);
+  try {
+    await wsServer.start();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // A-5: surface startup errors clearly
+    if (msg.includes("EADDRINUSE")) {
+      console.error(`Error: port ${options.port} is already in use. Choose a different port with --port.`);
+    } else {
+      console.error(`Failed to start WebSocket server: ${msg}`);
+    }
+    await piProcess.stop();
+    process.exit(1);
+  }
+
+  console.log(`  WebSocket listening on ws://${options.host}:${options.port}`);
+  console.log(`\nReady. Connect with: pi-client connect ws://127.0.0.1:${options.port}`);
 
   // Graceful shutdown
   const shutdown = async () => {
+    isShuttingDown = true;
     console.log("\nShutting down...");
     await wsServer.stop();
     await piProcess.stop();

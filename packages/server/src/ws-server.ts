@@ -5,15 +5,16 @@
  * the connected client and the pi child process.
  *
  * Connection lifecycle:
- * 1. Client connects via WebSocket
- * 2. Client sends HelloMessage
+ * 1. Client connects via WebSocket — slot reserved immediately
+ * 2. Client sends HelloMessage (token validated if configured)
  * 3. Server validates protocol version
  * 4. Server queries pi for state (get_state + get_messages)
  * 5. Server sends WelcomeMessage with full state
- * 6. Steady-state: relay messages bidirectionally
+ * 6. Steady-state: relay messages bidirectionally (server-side keepalive ping)
  * 7. On disconnect: cancel pending UI requests, accept new client
  */
 
+import { randomUUID } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   PROTOCOL_VERSION,
@@ -29,41 +30,80 @@ import {
 import { type IPiTransport } from "./pi-process.js";
 import { UIBridge } from "./ui-bridge.js";
 
+/** Timeout handle stored alongside each pending command so we can clear it on stop. */
+interface PendingCommand {
+  resolve: (data: Record<string, unknown>) => void;
+  reject: (err: Error) => void;
+  timeoutId: ReturnType<typeof setTimeout>;
+}
 
 export interface WsServerOptions {
   port: number;
+  host?: string;
+  token?: string;
   piProcess: IPiTransport;
   extensionUITimeoutMs?: number;
 }
 
+/** Stable, ephemeral ID for this server process. */
+const SERVER_ID = randomUUID();
+
 export class WsServer {
   private wss: WebSocketServer | null = null;
   private client: WebSocket | null = null;
-  private clientId: string | null = null;
   private seq = 0;
   private uiBridge: UIBridge;
   private piProcess: IPiTransport;
   private port: number;
+  private host: string;
+  private token: string | undefined;
 
-  /** Pending pi commands waiting for response (id → resolve) */
-  private pendingPiCommands = new Map<string, (data: Record<string, unknown>) => void>();
+  /** Whether a graceful shutdown is in progress. */
+  private isShuttingDown = false;
+
+  /** Pending pi commands waiting for response (id → PendingCommand). */
+  private pendingPiCommands = new Map<string, PendingCommand>();
   private piCommandId = 0;
+
+  /** Keepalive: interval + pending pong timeout per client. */
+  private keepaliveInterval: ReturnType<typeof setInterval> | null = null;
+  private pongTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: WsServerOptions) {
     this.port = options.port;
+    this.host = options.host ?? "127.0.0.1";
+    this.token = options.token;
     this.piProcess = options.piProcess;
     this.uiBridge = new UIBridge(options.extensionUITimeoutMs);
 
     // Handle messages from pi's stdout
     this.piProcess.onMessage((message) => this.handlePiMessage(message));
+
+    // Wire up pi process exit → notify client (A-3)
+    if ("onExit" in this.piProcess && typeof this.piProcess.onExit === "function") {
+      (this.piProcess as { onExit(cb: (code: number | null, signal: string | null) => void): void }).onExit(
+        (code, signal) => this.handlePiExit(code, signal),
+      );
+    }
   }
 
   /**
    * Start the WebSocket server.
    */
   async start(): Promise<void> {
-    return new Promise((resolve) => {
-      this.wss = new WebSocketServer({ port: this.port }, () => {
+    return new Promise((resolve, reject) => {
+      this.wss = new WebSocketServer({ port: this.port, host: this.host });
+
+      // A-5: handle startup errors (EADDRINUSE etc.)
+      const onError = (err: Error) => {
+        this.wss?.close();
+        reject(err);
+      };
+
+      this.wss.once("error", onError);
+
+      this.wss.once("listening", () => {
+        this.wss!.removeListener("error", onError);
         resolve();
       });
 
@@ -75,7 +115,17 @@ export class WsServer {
    * Stop the server and close all connections.
    */
   async stop(): Promise<void> {
+    this.isShuttingDown = true;
+
+    // A-8: reject all pending pi commands
+    for (const [, pending] of this.pendingPiCommands) {
+      clearTimeout(pending.timeoutId);
+      pending.reject(new Error("Server stopping"));
+    }
+    this.pendingPiCommands.clear();
+
     this.uiBridge.cancelAll();
+    this.stopKeepalive();
 
     if (this.client) {
       this.client.close(1001, "Server shutting down");
@@ -96,7 +146,8 @@ export class WsServer {
   // ===========================================================================
 
   private handleConnection(ws: WebSocket): void {
-    // Only one client at a time (rw mode only, no ro for MVP)
+    // A-6: Reserve slot immediately on TCP connect (before hello).
+    // This prevents two simultaneous connections both passing the check.
     if (this.client) {
       const error = createError("INTERNAL_ERROR", "Another client is already connected");
       ws.send(JSON.stringify(error));
@@ -104,9 +155,15 @@ export class WsServer {
       return;
     }
 
+    // Reserve the slot right now with the incoming socket.
+    this.client = ws;
+
     let handshakeComplete = false;
 
     ws.on("message", async (data) => {
+      // Guard: only process messages from the currently active socket.
+      if (this.client !== ws) return;
+
       let parsed: unknown;
       try {
         parsed = JSON.parse(data.toString());
@@ -122,22 +179,36 @@ export class WsServer {
           const error = createError("INVALID_HELLO", "First message must be a HelloMessage");
           ws.send(JSON.stringify(error));
           ws.close(1002, "Invalid handshake");
+          this.client = null;
           return;
         }
 
         const hello = parsed as HelloMessage;
+
+        // A-1: Validate token if one is configured
+        if (this.token !== undefined) {
+          if (hello.token !== this.token) {
+            ws.send(JSON.stringify({
+              type: "error",
+              code: "UNAUTHORIZED",
+              message: "Invalid or missing token",
+            }));
+            ws.close(1008, "Unauthorized");
+            this.client = null;
+            return;
+          }
+        }
 
         // Validate protocol version
         if (hello.protocolVersion !== PROTOCOL_VERSION) {
           const error = createIncompatibleProtocolError(hello.protocolVersion, PROTOCOL_VERSION);
           ws.send(JSON.stringify(error));
           ws.close(1002, "Incompatible protocol version");
+          this.client = null;
           return;
         }
 
-        // Handshake OK — register client
-        this.client = ws;
-        this.clientId = hello.clientId;
+        // Handshake OK
         handshakeComplete = true;
 
         // Send welcome with full state
@@ -152,8 +223,12 @@ export class WsServer {
           ws.send(JSON.stringify(error));
           ws.close(1011, "Failed to sync state");
           this.client = null;
-          this.clientId = null;
+          return;
         }
+
+        // Start keepalive pings (A-9)
+        this.startKeepalive(ws);
+
         return;
       }
 
@@ -161,12 +236,20 @@ export class WsServer {
       this.handleClientMessage(parsed as ClientMessage);
     });
 
+    ws.on("pong", () => {
+      // Client responded — cancel the "no pong" timeout
+      if (this.pongTimeout) {
+        clearTimeout(this.pongTimeout);
+        this.pongTimeout = null;
+      }
+    });
+
     ws.on("close", () => {
       if (this.client === ws) {
         this.client = null;
-        this.clientId = null;
         // Cancel pending UI requests so pi doesn't hang
         this.uiBridge.cancelAll();
+        this.stopKeepalive();
       }
     });
 
@@ -182,8 +265,12 @@ export class WsServer {
   private handleClientMessage(message: ClientMessage): void {
     switch (message.type) {
       case "command":
-        // Relay the pi RPC command to pi's stdin
-        this.piProcess.send(message.payload);
+        // A-4: Wrap pi send in try/catch
+        try {
+          this.piProcess.send(message.payload);
+        } catch (err) {
+          this.sendErrorToClient("PI_PROCESS_ERROR", `Pi process is not responsive: ${err instanceof Error ? err.message : err}`);
+        }
         break;
 
       case "extension_ui_response":
@@ -213,11 +300,11 @@ export class WsServer {
       const pending = this.pendingPiCommands.get(message.id);
       if (pending) {
         this.pendingPiCommands.delete(message.id);
-        pending(message);
+        clearTimeout(pending.timeoutId);
+        pending.resolve(message);
         return;
       }
     }
-
 
     // Check if this is an extension UI request
     if (this.uiBridge.isExtensionUIRequest(message)) {
@@ -233,8 +320,13 @@ export class WsServer {
         const id = message.id as string;
 
         this.uiBridge.registerRequest(id, message.method as string).then((response) => {
-          // Send the response back to pi's stdin
-          this.piProcess.send(response);
+          // A-4: Wrap pi send in try/catch
+          try {
+            this.piProcess.send(response);
+          } catch (err) {
+            // Pi died while waiting for UI response — nothing to do, A-3 handles notification
+            const _ignored = err;
+          }
         });
 
         // Forward the request to the client
@@ -260,6 +352,21 @@ export class WsServer {
   }
 
   // ===========================================================================
+  // Pi process exit (A-3)
+  // ===========================================================================
+
+  private handlePiExit(code: number | null, signal: string | null): void {
+    if (this.isShuttingDown) return; // A-7: normal shutdown, don't treat as error
+
+    const msg = `Pi process exited (code=${code}, signal=${signal})`;
+    if (this.client) {
+      this.sendErrorToClient("PI_PROCESS_ERROR", msg);
+      this.client.close(1011, "Pi process exited");
+      this.client = null;
+    }
+  }
+
+  // ===========================================================================
   // State sync
   // ===========================================================================
 
@@ -279,7 +386,7 @@ export class WsServer {
     return {
       type: "welcome",
       protocolVersion: PROTOCOL_VERSION,
-      serverId: this.getServerId(),
+      serverId: SERVER_ID,
       sessionState: state,
       messages,
       currentSeq: this.seq,
@@ -292,18 +399,66 @@ export class WsServer {
   private sendPiCommand(command: Record<string, unknown>): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
       const id = `srv_${++this.piCommandId}`;
-      const timeout = setTimeout(() => {
+
+      // A-8: store timeoutId so stop() can clear it
+      const timeoutId = setTimeout(() => {
         this.pendingPiCommands.delete(id);
         reject(new Error(`Timeout waiting for pi response to ${command.type}`));
       }, 10_000);
 
-      this.pendingPiCommands.set(id, (response) => {
-        clearTimeout(timeout);
-        resolve(response);
-      });
+      this.pendingPiCommands.set(id, { resolve, reject, timeoutId });
 
-      this.piProcess.send({ ...command, id });
+      // A-4: Wrap pi send in try/catch
+      try {
+        this.piProcess.send({ ...command, id });
+      } catch (err) {
+        clearTimeout(timeoutId);
+        this.pendingPiCommands.delete(id);
+        reject(err);
+      }
     });
+  }
+
+  // ===========================================================================
+  // Keepalive (A-9)
+  // ===========================================================================
+
+  private startKeepalive(ws: WebSocket): void {
+    this.stopKeepalive(); // clear any previous
+
+    this.keepaliveInterval = setInterval(() => {
+      if (this.client !== ws) {
+        this.stopKeepalive();
+        return;
+      }
+      if (ws.readyState !== 1 /* OPEN */) {
+        this.stopKeepalive();
+        return;
+      }
+
+      ws.ping();
+
+      // If no pong within 10s, close the connection
+      this.pongTimeout = setTimeout(() => {
+        if (this.client === ws) {
+          this.client = null;
+          this.uiBridge.cancelAll();
+        }
+        this.stopKeepalive();
+        ws.terminate();
+      }, 10_000);
+    }, 30_000);
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveInterval) {
+      clearInterval(this.keepaliveInterval);
+      this.keepaliveInterval = null;
+    }
+    if (this.pongTimeout) {
+      clearTimeout(this.pongTimeout);
+      this.pongTimeout = null;
+    }
   }
 
   // ===========================================================================
@@ -316,13 +471,11 @@ export class WsServer {
     }
   }
 
-  private nextSeq(): number {
-    return ++this.seq;
+  private sendErrorToClient(code: string, message: string): void {
+    this.sendToClient({ type: "error", code, message });
   }
 
-  private getServerId(): string {
-    // Stable ID for this server instance — for now, just use a fixed string.
-    // In production, derive from config or persist across restarts.
-    return "pi-server-1";
+  private nextSeq(): number {
+    return ++this.seq;
   }
 }
