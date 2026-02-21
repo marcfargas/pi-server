@@ -11,8 +11,9 @@ import React from "react";
 import { render } from "ink";
 import App from "./app.js";
 
-function parseArgs(args: string[]): { url: string } {
+function parseArgs(args: string[]): { url: string; token?: string } {
   let url = "ws://localhost:3333";
+  let token: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -20,6 +21,8 @@ function parseArgs(args: string[]): { url: string } {
       if (i + 1 < args.length && !args[i + 1]!.startsWith("-")) {
         url = args[++i]!;
       }
+    } else if (arg === "--token" || arg === "-t") {
+      token = args[++i];
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -31,7 +34,7 @@ function parseArgs(args: string[]): { url: string } {
     }
   }
 
-  return { url };
+  return { url, token };
 }
 
 function printHelp(): void {

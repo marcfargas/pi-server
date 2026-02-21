@@ -25,13 +25,11 @@ export interface HelloMessage {
   protocolVersion: number;
   /** Unique client identifier (UUID). Stable across reconnects for the same client. */
   clientId: string;
-  /** Reserved for future reconnect: last sequence number received. */
-  lastSeq?: number;
-  /** Reserved for future auth. Server ignores in protocol v1. */
-  auth?: {
-    type: string;
-    token: string;
-  };
+  /**
+   * Authentication token. Server validates if --token is configured.
+   * Required when server is started with --token flag.
+   */
+  token?: string;
 }
 
 /**
@@ -159,28 +157,11 @@ export type ServerMessage =
 export type ErrorCode =
   | "INCOMPATIBLE_PROTOCOL"   // protocolVersion mismatch
   | "INVALID_HELLO"           // malformed hello message
+  | "UNAUTHORIZED"            // invalid or missing auth token
   | "SESSION_NOT_FOUND"       // pi process not running
   | "PI_PROCESS_ERROR"        // pi child process crashed
   | "EXTENSION_UI_TIMEOUT"    // no response to UI request within timeout
   | "INTERNAL_ERROR";         // unexpected server error
-
-// =============================================================================
-// Configuration
-// =============================================================================
-
-/** Server configuration (subset exposed to protocol for documentation) */
-export interface ServerConfig {
-  /** WebSocket port */
-  port: number;
-  /** Working directory for the pi process */
-  cwd: string;
-  /** Path to pi CLI (default: auto-detected from PATH) */
-  piCliPath?: string;
-  /** Additional arguments to pass to pi */
-  piArgs?: string[];
-  /** Extension UI dialog timeout in milliseconds (default: 60000) */
-  extensionUITimeoutMs?: number;
-}
 
 // =============================================================================
 // Utility Types
@@ -188,20 +169,33 @@ export interface ServerConfig {
 
 /**
  * Type guard: is this a HelloMessage?
+ * Validates all required fields exist with correct types.
  */
 export function isHelloMessage(msg: unknown): msg is HelloMessage {
+  if (typeof msg !== "object" || msg === null) return false;
+  const m = msg as Record<string, unknown>;
   return (
-    typeof msg === "object" &&
-    msg !== null &&
-    (msg as Record<string, unknown>).type === "hello"
+    m.type === "hello" &&
+    typeof m.protocolVersion === "number" &&
+    typeof m.clientId === "string"
   );
 }
 
 /**
  * Type guard: is this a ClientMessage (post-handshake)?
+ * Validates message structure, not just the type tag.
  */
 export function isClientMessage(msg: unknown): msg is ClientMessage {
   if (typeof msg !== "object" || msg === null) return false;
-  const type = (msg as Record<string, unknown>).type;
-  return type === "command" || type === "extension_ui_response" || type === "ping";
+  const m = msg as Record<string, unknown>;
+  switch (m.type) {
+    case "command":
+      return typeof m.payload === "object" && m.payload !== null;
+    case "extension_ui_response":
+      return typeof m.id === "string";
+    case "ping":
+      return true;
+    default:
+      return false;
+  }
 }

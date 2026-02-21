@@ -27,7 +27,6 @@ export type {
 
   // Misc
   ErrorCode,
-  ServerConfig,
 } from "./types.js";
 
 export { isHelloMessage, isClientMessage } from "./types.js";
