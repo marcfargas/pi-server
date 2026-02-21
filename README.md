@@ -26,13 +26,13 @@ Pi is a powerful coding agent, but it's tied to your terminal. Close the tab, lo
 npm install -g @marcfargas/pi-server @marcfargas/pi-client
 ```
 
-> **Note:** `npx` and PowerShell `.ps1` shims do not reliably pass `--` to the underlying command. Use a global install and invoke from **cmd** or **Git Bash**, not PowerShell, when passing pi options via `--`.
+> **Note:** Use `--pi` instead of `--` to separate pi options — PowerShell `.ps1` shims strip `--` from arguments.
 
 ## Quick Start
 
 ```bash
 # Terminal 1 — start the server (localhost only, no auth needed)
-pi-server serve -- --provider google --model gemini-2.5-flash
+pi-server serve --pi --provider google --model gemini-2.5-flash
 
 # Terminal 2 — connect
 pi-client connect ws://localhost:3333
@@ -44,7 +44,7 @@ Type a message, see streaming responses. Close the client, reopen it — your co
 
 ```bash
 # Server — expose on network with token auth
-pi-server serve --host 0.0.0.0 --token mysecret -- --provider anthropic --model claude-sonnet-4-5
+pi-server serve --host 0.0.0.0 --token mysecret --pi --provider anthropic --model claude-sonnet-4-5
 
 # Client — provide matching token
 pi-client connect ws://server:3333 --token mysecret
@@ -64,9 +64,9 @@ Unscoped convenience packages (`pi-server`, `pi-client`) are thin wrappers that 
 ## Server Options
 
 ```
-pi-server serve [options] [-- pi-options...]
+pi-server serve [options] [--pi pi-options...]
 
-Server options (before --):
+Server options:
   --port, -p <number>    WebSocket port (default: 3333)
   --host <address>       Bind address (default: 127.0.0.1 — localhost only)
   --token <string>       Auth token clients must provide (auto-generated for network)
@@ -74,17 +74,17 @@ Server options (before --):
   --pi-cli-path <path>   Path to pi CLI (default: auto-detect)
   --ui-timeout <ms>      Extension UI dialog timeout (default: 60000)
 
-Pi options (after --):
+Pi options (after --pi):
   Passed directly to pi. See pi --help. Common:
-  --provider, --model, --no-session, --no-extensions, --no-skills
+  --provider, --model, -c, --no-session, --no-extensions, --no-skills
 ```
 
 ```bash
 # Examples
-pi-server serve -- --provider google --model gemini-2.5-flash
-pi-server serve --port 9090 -- --provider anthropic --model claude-sonnet-4-5
-pi-server serve --host 0.0.0.0 --token mysecret -- --no-extensions
-pi-server serve --cwd /path/to/project -- --no-skills
+pi-server serve --pi --provider google --model gemini-2.5-flash
+pi-server serve --port 9090 --pi --provider anthropic --model claude-sonnet-4-5
+pi-server serve --host 0.0.0.0 --token mysecret --pi --no-extensions
+pi-server serve --pi -c                          # continue previous session
 ```
 
 ## Security
