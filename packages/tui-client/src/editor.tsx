@@ -66,9 +66,13 @@ export function Editor({
     (input, key) => {
       if (!active) return;
 
+      // Kitty keyboard protocol: Shift+Enter = \x1b[13;2u
+      // Ink doesn't parse CSI u sequences, so it arrives as literal text.
+      const isKittyShiftEnter = input.includes("\x1b[13;2u") || input.includes("[13;2u");
+
       // Enter: submit. Shift+Enter: newline.
-      if (key.return) {
-        if (key.shift) {
+      if (key.return || isKittyShiftEnter) {
+        if (key.shift || isKittyShiftEnter) {
           // Insert newline
           setLines((prev) => {
             const newLines = [...prev];
