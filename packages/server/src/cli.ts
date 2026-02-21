@@ -36,12 +36,10 @@ function parseArgs(args: string[]): ServeOptions {
     piArgs: [],
   };
 
-  // Split on -- or --pi separator (--pi works in PowerShell where -- is stripped)
+  // Split on -- separator
   const ddIndex = args.indexOf("--");
-  const piIndex = args.indexOf("--pi");
-  const splitAt = ddIndex >= 0 ? ddIndex : piIndex;
-  const serverArgs = splitAt >= 0 ? args.slice(0, splitAt) : args;
-  const piArgs = splitAt >= 0 ? args.slice(splitAt + 1) : [];
+  const serverArgs = ddIndex >= 0 ? args.slice(0, ddIndex) : args;
+  const piArgs = ddIndex >= 0 ? args.slice(ddIndex + 1) : [];
   options.piArgs = piArgs;
 
   for (let i = 0; i < serverArgs.length; i++) {
@@ -117,7 +115,7 @@ function parseArgs(args: string[]): ServeOptions {
         break;
       default:
         if (arg.startsWith("-")) {
-          console.error(`Unknown option: ${arg}\nUse --pi to pass options to pi: pi-server serve --pi ${arg}`);
+          console.error(`Unknown option: ${arg}\nUse -- to pass options to pi: pi-server serve -- ${arg}`);
           process.exit(1);
         }
     }
@@ -130,9 +128,9 @@ function printHelp(): void {
   console.log(`pi-server — Detachable agent sessions over WebSocket
 
 Usage:
-  pi-server serve [options] [--pi pi-options...]
+  pi-server serve [options] [-- pi-options...]
 
-Server options:
+Server options (before --):
   --port, -p <number>    WebSocket port (default: 3333)
   --host <address>       Bind address (default: 127.0.0.1 — localhost only)
                          Use --host 0.0.0.0 for network exposure (requires --token)
@@ -143,22 +141,22 @@ Server options:
   --ui-timeout <ms>      Extension UI dialog timeout in ms (default: 60000)
   --help, -h             Show this help
 
-Pi options (after --pi or --):
-  Everything after --pi (or --) is passed directly to pi.
-  Use --pi instead of -- in PowerShell (where -- is stripped by .ps1 shims).
-  See pi --help for all options.
+Pi options (after --):
+  Everything after -- is passed directly to pi. See pi --help for all options.
   Common: --provider, --model, -c, --no-session, --no-extensions, --no-skills
+
+  PowerShell: use the stop-parsing token to preserve --
+    pi-server serve --% -- -c --provider google
 
 Security:
   By default, pi-server binds to 127.0.0.1 (localhost only).
   To allow network connections, use --host 0.0.0.0 (requires --token).
 
 Examples:
-  pi-server serve --pi --provider google --model gemini-2.5-flash
-  pi-server serve --port 9090 --pi --provider anthropic --model claude-sonnet-4-5
-  pi-server serve --host 0.0.0.0 --token mysecret --pi --no-extensions
-  pi-server serve --pi -c                          # continue previous session
-  pi-server serve --cwd /path/to/project -- --no-extensions --no-skills
+  pi-server serve -- --provider google --model gemini-2.5-flash
+  pi-server serve --port 9090 -- --provider anthropic --model claude-sonnet-4-5
+  pi-server serve --host 0.0.0.0 --token mysecret -- --no-extensions
+  pi-server serve -- -c                             # continue previous session
 `);
 }
 

@@ -26,13 +26,13 @@ Pi is a powerful coding agent, but it's tied to your terminal. Close the tab, lo
 npm install -g @marcfargas/pi-server @marcfargas/pi-client
 ```
 
-> **Note:** Use `--pi` instead of `--` to separate pi options — PowerShell `.ps1` shims strip `--` from arguments.
+> **PowerShell note:** `.ps1` shims strip `--` from arguments. Use the stop-parsing token: `pi-server serve --% -- -c`
 
 ## Quick Start
 
 ```bash
 # Terminal 1 — start the server (localhost only, no auth needed)
-pi-server serve --pi --provider google --model gemini-2.5-flash
+pi-server serve -- --provider google --model gemini-2.5-flash
 
 # Terminal 2 — connect
 pi-client connect ws://localhost:3333
@@ -44,7 +44,7 @@ Type a message, see streaming responses. Close the client, reopen it — your co
 
 ```bash
 # Server — expose on network with token auth
-pi-server serve --host 0.0.0.0 --token mysecret --pi --provider anthropic --model claude-sonnet-4-5
+pi-server serve --host 0.0.0.0 --token mysecret -- --provider anthropic --model claude-sonnet-4-5
 
 # Client — provide matching token
 pi-client connect ws://server:3333 --token mysecret
@@ -74,17 +74,17 @@ Server options:
   --pi-cli-path <path>   Path to pi CLI (default: auto-detect)
   --ui-timeout <ms>      Extension UI dialog timeout (default: 60000)
 
-Pi options (after --pi):
+Pi options (after --):
   Passed directly to pi. See pi --help. Common:
   --provider, --model, -c, --no-session, --no-extensions, --no-skills
 ```
 
 ```bash
 # Examples
-pi-server serve --pi --provider google --model gemini-2.5-flash
-pi-server serve --port 9090 --pi --provider anthropic --model claude-sonnet-4-5
-pi-server serve --host 0.0.0.0 --token mysecret --pi --no-extensions
-pi-server serve --pi -c                          # continue previous session
+pi-server serve -- --provider google --model gemini-2.5-flash
+pi-server serve --port 9090 -- --provider anthropic --model claude-sonnet-4-5
+pi-server serve --host 0.0.0.0 --token mysecret -- --no-extensions
+pi-server serve -- -c                             # continue previous session
 ```
 
 ## Security
