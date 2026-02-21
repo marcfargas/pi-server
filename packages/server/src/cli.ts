@@ -114,9 +114,11 @@ function parseArgs(args: string[]): ServeOptions {
       case "serve":
         break;
       default:
-        if (arg.startsWith("-")) {
-          console.error(`Unknown option: ${arg}\nUse -- to pass options to pi: pi-server serve -- ${arg}`);
-          process.exit(1);
+        // Unknown flags are forwarded to pi (supports pnpm npx which strips --)
+        options.piArgs.push(arg);
+        // If it looks like a flag with a value, grab the next arg too
+        if (arg.startsWith("-") && i + 1 < serverArgs.length && !serverArgs[i + 1]!.startsWith("-")) {
+          options.piArgs.push(serverArgs[++i]!);
         }
     }
   }
